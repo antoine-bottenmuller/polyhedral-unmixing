@@ -1,0 +1,899 @@
+import time
+import random
+import itertools
+import numpy as np
+from scipy import ndimage, io
+from typing import Optional, Tuple, Callable
+from sklearn.mixture import GaussianMixture
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn import svm
+
+from src.functions import to_half_space_couples, scalar, keep_only_necessary_couples
+from src.functions import algo_0, norm, normed
+
+#from min_norm_point_C.min_norm_point import minimum_norm_points_to_polyhedra # for the C version!
+
+###
+# Array normalization and standardization functions
+###
+
+def normalized(
+        array:np.ndarray, 
+        axis:Optional[tuple]=None, 
+        output_range:Optional[tuple]=None, 
+        output_dtype:Optional[np.dtype]=None
+    ) -> np.ndarray:
+    if output_dtype is None:
+        if np.issubdtype(array.dtype, np.integer):
+            output_dtype = np.float64
+        else:
+            output_dtype = array.dtype
+    if output_range is None:
+        if np.issubdtype(output_dtype, np.integer):
+            output_range = (np.iinfo(output_dtype).min, np.iinfo(output_dtype).max)
+        else:
+            output_range = (0., 1.)
+    if axis is None:
+        axis = tuple(np.arange(array.ndim, dtype=int))
+    a_min = array.min(axis, keepdims=True)
+    delta = array.max(axis, keepdims=True) - a_min
+    diff_zero = delta < np.finfo(array.dtype).resolution
+    float_out = (output_range[1] - output_range[0]) * ~diff_zero / (delta * ~diff_zero + diff_zero)
+    float_out = (array - a_min) * float_out + output_range[0]
+    if np.issubdtype(output_dtype, np.integer):
+        return np.round(float_out).astype(output_dtype)
+    elif float_out.dtype != output_dtype:
+        return float_out.astype(output_dtype)
+    return float_out
+
+def standardized(
+        array:np.ndarray, 
+        axis:Optional[tuple]=None, 
+        std_prop:Optional[float]=None, 
+        output_dtype:Optional[np.dtype]=None
+    ) -> np.ndarray:
+    if output_dtype is None:
+        if np.issubdtype(array.dtype, np.integer):
+            output_dtype = np.float64
+        else:
+            output_dtype = array.dtype
+    std = np.std(array, axis=axis, keepdims=True)
+    if std_prop is not None and std_prop != 1:
+        std = std * std_prop + (1 - std_prop)
+    mean = np.mean(array, axis=axis, keepdims=True)
+    std_zero = std < np.finfo(array.dtype).resolution
+    float_out = (array - mean) * ~std_zero / (std * ~std_zero + std_zero)
+    if np.issubdtype(output_dtype, np.integer):
+        return np.round(float_out).astype(output_dtype)
+    elif float_out.dtype != output_dtype:
+        return float_out.astype(output_dtype)
+    return float_out
+
+###
+# Import MATLAB image and/or mask with wavelength sensitivity calibration
+###
+
+def import_and_calibrate_mlab_image(
+        image_path:str, 
+        image_key:str='ref', 
+        calib_path:Optional[str]=None, 
+        calib_split:Optional[str]=None, 
+        dtype:Optional[np.dtype]=None, 
+        mask_key:Optional[str]=None
+    ) -> Tuple[np.ndarray,np.ndarray]|np.ndarray|None:
+    """
+    Imports and calibrates image from a MATLAB .mat file located at 'image_path' 
+    under the key 'image_key' regarding calibration file located at 'calib_path'
+    (Optional) with a mask under the key 'mask_key' (Optional).
+    """
+    data = io.loadmat(image_path)
+    if mask_key is not None:
+        if mask_key not in data.keys():
+            print(f"Warning: mask_key '{mask_key}' not in image file's keys. Null mask returned.")
+            print(f"Keys:\n{data.keys()}")
+            mask = None
+        else:
+            mask = data[mask_key]
+            if type(mask) is not np.ndarray:
+                try:
+                    mask = np.asarray(mask).astype(bool)
+                except:
+                    print(f"Warning: mask object of key '{mask_key}' in image file is not a Numpy array, but a {type(mask)}. Null mask returned.")
+                    mask = None
+            else:
+                mask = mask.astype(bool)
+    if image_key not in data.keys():
+        print(f"Warning: image_key '{image_key}' not in image file's keys. Null image returned.")
+        print(f"Keys:\n{data.keys()}")
+        if mask_key is None:
+            return None
+        return None, mask
+    img = data[image_key]
+    if type(img) is not np.ndarray:
+        try:
+            img = np.asarray(img)
+        except:
+            print(f"Warning: image object of key '{image_key}' in image file is not a Numpy array, but a {type(img)}. Null image returned.")
+            if mask_key is None:
+                return None
+            return None, mask
+    if calib_path is None:
+        if mask_key is None:
+            if dtype is None or img.dtype == dtype:
+                return img
+            return img.astype(dtype)
+        if dtype is None or img.dtype == dtype:
+            return img, mask
+        return img.astype(dtype), mask
+    if calib_split is None:
+        calib_split = ' '
+    calib = open(calib_path, 'r').read().split(calib_split)
+    sensi = []
+    for c in calib:
+        if len(c) > 0:
+            try:
+                s = float(c)
+                sensi.append(s)
+            except:
+                continue
+    if len(sensi) != img.shape[-1]:
+        print("Warning: calibration file must contain as many values as the number of channels in image. Original image returned.")
+        if mask_key is None:
+            if dtype is None or img.dtype == dtype:
+                return img
+            return img.astype(dtype)
+        if dtype is None or img.dtype == dtype:
+            return img, mask
+        return img.astype(dtype), mask
+    sensi = np.asarray(sensi, dtype=img.dtype)
+    if dtype is None:
+        dtype = img.dtype
+    img = img / sensi
+    if np.issubdtype(dtype, np.floating):
+        if img.dtype != dtype:
+            img = img.astype(dtype)
+    else:
+        img = np.round(img).astype(dtype)
+    if mask_key is None:
+        return img
+    return img, mask
+
+###
+# Pre-processing image functions
+###
+
+def to_diameter(radius:int|float) -> int|float:
+    return 2*radius+1
+
+def to_radius(diameter:int|float) -> int|float:
+    res = (diameter-1)/2
+    if int(res) == res:
+        return int(res)
+    return res
+
+def binary_ball(diameter:int|float, ndim:int=2, dtype:type=bool) -> np.ndarray:
+    radius = to_radius(diameter)
+    x = np.arange(diameter)-radius
+    xs = [x]*ndim
+    grids = np.meshgrid(*xs)
+    distance = np.sum(np.asarray(grids)**2, axis=0)
+    d = distance <= radius**2 + (radius-int(radius))**2
+    if np.sum(d)==0 and np.prod(d.shape)>0:
+        return np.ones(d.shape, dtype=dtype)
+    return d.astype(dtype)
+
+def channel_preserved_alternating_sequential_filter(
+        input:np.ndarray, 
+        n:int, 
+        increment:int=1, 
+        M_or_N:str='M', 
+        se_axis:Optional[int]=None, 
+        out:Optional[np.ndarray]=None
+    ) -> np.ndarray:
+    """
+    Special Alternating Sequential Filter algorithm which preserves channels.\n
+    Parameters:
+    * input: n-dimensional array to process ;
+    * n: maximum radius of the structuring element, reached at the last loop ;
+    * increment: value of loop incrementation on SE's radius (multiple of 0.5) ;
+    * M_or_N: if 'M', the ASF starts with closing, otherwise ('N') by opening ;
+    * se_axis (Optional): if none, the SE is a ball, otherwise a line on given axis ;
+    * out (Optional): output array in which the computed data is stored.
+    """
+    if out is None:
+        out = np.empty_like(input)
+    out[:] = input[:]
+    nbi = int(np.ceil(n/increment))
+    if input.dtype == bool:
+        if M_or_N == 'M':
+            for i in range(1,nbi+1):
+                size = to_diameter(min(int(i*increment), n))
+                if se_axis is None:
+                    selem = binary_ball(size, ndim=input.ndim-1, dtype=bool)[..., np.newaxis]
+                else:
+                    shape = [1 if i!=se_axis else size for i in range(input.ndim)]
+                    selem = np.ones(shape, dtype=bool)
+                ndimage.binary_closing(out, structure=selem, output=out, border_value=0)
+                ndimage.binary_opening(out, structure=selem, output=out, border_value=0)
+        else:
+            for i in range(1,nbi+1):
+                size = to_diameter(min(int(i*increment), n))
+                if se_axis is None:
+                    selem = binary_ball(size, ndim=input.ndim-1, dtype=bool)[..., np.newaxis]
+                else:
+                    shape = [1 if i!=se_axis else size for i in range(input.ndim)]
+                    selem = np.ones(shape, dtype=bool)
+                ndimage.binary_opening(out, structure=selem, output=out, border_value=0)
+                ndimage.binary_closing(out, structure=selem, output=out, border_value=0)
+    else:
+        if M_or_N == 'M':
+            for i in range(1,nbi+1):
+                size = to_diameter(min(int(i*increment), n))
+                if se_axis is None:
+                    selem = binary_ball(size, ndim=input.ndim-1, dtype=bool)[..., np.newaxis]
+                else:
+                    shape = [1 if i!=se_axis else size for i in range(input.ndim)]
+                    selem = np.ones(shape, dtype=bool)
+                ndimage.grey_closing(out, footprint=selem, output=out, mode="reflect")
+                ndimage.grey_opening(out, footprint=selem, output=out, mode="reflect")
+        else:
+            for i in range(1,nbi+1):
+                size = to_diameter(min(int(i*increment), n))
+                if se_axis is None:
+                    selem = binary_ball(size, ndim=input.ndim-1, dtype=bool)[..., np.newaxis]
+                else:
+                    shape = [1 if i!=se_axis else size for i in range(input.ndim)]
+                    selem = np.ones(shape, dtype=bool)
+                ndimage.grey_opening(out, footprint=selem, output=out, mode="reflect")
+                ndimage.grey_closing(out, footprint=selem, output=out, mode="reflect")
+    return out
+
+def preprocess_spectral_image(
+        image:np.ndarray, 
+        mask:Optional[np.ndarray]=None, 
+        crop:Optional[tuple]=None, 
+        denoize_image_radius:bool|int=False, 
+        homogenize_luminance:bool|float=False, 
+        standardize_channels_beforePCA:bool|float=False, 
+        ndim_PCA_reduction:Optional[int]=None, 
+        standardize_channels_afterPCA:bool|float=False, 
+        standardize_globally:bool=True
+    ) -> Tuple[np.ndarray,np.ndarray]|np.ndarray:
+    """
+    Function to pre-process a spectral image, regarding a mask or not.
+    * image: spectral image (..., n_channels) ;
+    * mask: mask of spectral image (...,) ;
+    * crop: tuple of crops along image dimensions of size len(...) or len(...)+1 ;
+    * denoize_image_radius: boolean or integer for radius of the strcutruring element 
+     for ASF (denoizing) applied on image ;
+    * homogenize_luminance: boolean or floating for proportion of the luminance 
+     removal from image (luminance computed pixel-by-pixel along the channel axis), 
+     a negative value allows to blur luminance factor on image support ;
+    * ndim_PCA_reduction: integer for the number of dimensions kept after PCA applied 
+     on image for channel-dimension reduction ;
+    * standardize_channels: boolean or floating for proportion of the channel 
+     standardization (recommended if no PCA applied).\n
+    Returns pre-processed image, with corresponding mask or not.
+    """
+    
+    if type(image) is not np.ndarray:
+        raise ValueError("Parameter 'mask' must be a ndarray")
+    if image.ndim < 2:
+        raise ValueError("Parameter 'image' must be of ndim >= 2, the last dim being for channels")
+    
+    if mask is not None:
+        if type(mask) is not np.ndarray:
+            raise ValueError("Parameter 'mask' must be a ndarray")
+        if mask.ndim != image.ndim-1:
+            raise ValueError("Parameter 'mask' must be of ndim image.ndim-1")
+
+    # crop image (+ mask)
+    if crop is not None:
+        if len(crop) not in {image.ndim-1, image.ndim}:
+            raise ValueError("Parameter 'crop' must be of size image.ndim-1 or image.ndim")
+        slices = ()
+        for c in crop:
+            if c is None:
+                slices += (slice(None),)
+            elif type(c) is slice:
+                slices += (c,)
+            else:
+                slices += (slice(*c),)
+        image = image[slices]
+        if mask is not None:
+            if len(slices) == image.ndim:
+                slices = slices[:-1]
+            mask = mask[slices]
+
+    # denoize image with Alternate Sequential Filter
+    if denoize_image_radius is not None and denoize_image_radius != False:
+        radius = int(np.ceil(float(denoize_image_radius)))
+        image = channel_preserved_alternating_sequential_filter(image, n=radius, out=image)
+
+    # homogenize luminance
+    if homogenize_luminance is not None and homogenize_luminance != False:
+        prop = min(1, max(0, float(homogenize_luminance)) + int(float(homogenize_luminance)<0))
+        fluz = max(0, -float(homogenize_luminance))
+        axes = tuple(np.arange(image.ndim-1, dtype=int))
+        luminance = norm(ndimage.gaussian_filter(image, sigma=fluz, axes=axes), keepdims=True)
+        luminance_zero = luminance < np.finfo(luminance.dtype).resolution
+        noLuminance_image = image * ~luminance_zero / (luminance * ~luminance_zero + luminance_zero)
+        image = image * (1 - prop) + noLuminance_image * prop
+
+    # standardize channels
+    if standardize_channels_beforePCA is not None and standardize_channels_beforePCA != False:
+        prop = float(standardize_channels_beforePCA)
+        axes = tuple(np.arange(image.ndim-1, dtype=int))
+        image = standardized(image, axis=axes, std_prop=prop)
+
+    # reduce channel dimensionality with PCA
+    if ndim_PCA_reduction is not None:
+        if ndim_PCA_reduction > image.shape[-1] or ndim_PCA_reduction < 0:
+            ndim_PCA_reduction = image.shape[-1]
+        if mask is None:
+            temp_mask = np.ones(shape=image.shape[:-1], dtype=bool)
+        else:
+            temp_mask = mask
+        n_components = int(ndim_PCA_reduction)
+        reducted_data = PCA(n_components=n_components).fit_transform(image[temp_mask])
+        image = np.zeros(shape=image.shape[:-1]+reducted_data.shape[-1:], dtype=reducted_data.dtype)
+        image[temp_mask] = reducted_data
+    
+    # standardize channels
+    if standardize_channels_afterPCA is not None and standardize_channels_afterPCA != False:
+        prop = float(standardize_channels_afterPCA)
+        axes = tuple(np.arange(image.ndim-1, dtype=int))
+        image = standardized(image, axis=axes, std_prop=prop)
+    
+    # globally standardize (preserves directional std)
+    if standardize_globally is not None and standardize_globally:
+        image = image - np.mean(image, axis=tuple(np.arange(image.ndim-1, dtype=int)), keepdims=True)
+        image = standardized(image)
+
+    if mask is not None:
+        return image, mask
+    return image
+
+###
+# Computation of Gaussian parameters from hand-given class data interpreted as a rectangle window from p1 to p2 on image
+###
+
+def get_data_from_box_coord(img:np.ndarray, p1:tuple, p2:tuple) -> float|np.ndarray:
+    """
+    Array 'img' must be of dim len(p) (if grayscale image, only 1 feature), 
+    or len(p)+1 with the last axis for features (if multiple channels).\n
+    p1 is a corner point of the box on 'img' support, p2 is the opposite one.
+    """
+    coords = tuple([slice(int(min(p1[i],p2[i])),int(max(p1[i],p2[i]))) for i in range(len(p1))])
+    window = img[coords]
+    dvalue = window.reshape(np.prod(window.shape[:len(p1)]),np.prod(window.shape[len(p1):]))
+    return dvalue
+
+def get_mean_from_box_coord(img:np.ndarray, p1:tuple, p2:tuple) -> float|np.ndarray:
+    """
+    Array 'img' must be of dim len(p) (if grayscale image, only 1 feature), 
+    or len(p)+1 with the last axis for features (if multiple channels).\n
+    p1 is a corner point of the box on 'img' support, p2 is the opposite one.
+    """
+    coords = tuple([slice(int(min(p1[i],p2[i])),int(max(p1[i],p2[i]))) for i in range(len(p1))])
+    window = img[coords]
+    mvalue = np.mean(window.reshape(np.prod(window.shape[:len(p1)]),np.prod(window.shape[len(p1):])), axis=0)
+    return mvalue
+
+def get_covar_from_box_coord(img:np.ndarray, p1:tuple, p2:tuple) -> float|np.ndarray:
+    """
+    Array 'img' must be of dim len(p) (if grayscale image, only 1 feature), 
+    or len(p)+1 with the last axis for features (if multiple channels).\n
+    p1 is a corner point of the box on 'img' support, p2 is the opposite one.
+    """
+    coords = tuple([slice(int(min(p1[i],p2[i])),int(max(p1[i],p2[i]))) for i in range(len(p1))])
+    window = img[coords]
+    cvalue = np.cov(window.reshape(np.prod(window.shape[:len(p1)]),np.prod(window.shape[len(p1):])).T)
+    return cvalue
+
+###
+# Distance uniformization function
+###
+
+def to_min_2D_vec(v:np.ndarray) -> np.ndarray:
+    if v.ndim == 0:
+        return v[np.newaxis, np.newaxis]
+    elif v.ndim == 1:
+        return v[np.newaxis]
+    return v
+
+def orthonormalize(v:np.ndarray, eps:float=1e-15) -> np.ndarray:
+    """
+    Orthogonalizes the matrix U (d x n) using Gram-Schmidt Orthogonalization.
+    REFERENCE: Anmol Kabra
+    Github: gist.github.com/anmolkabra/
+    File: gram_schmidt.py
+    """
+    n = v.shape[0]
+    new_basis = v
+    for i in range(n):
+        prev_basis = new_basis[0:i]
+        coeff_vec = np.dot(prev_basis, new_basis[i].T)
+        new_basis[i] -= np.dot(coeff_vec, prev_basis).T
+        if norm(new_basis[i]) < eps:
+            new_basis[i][new_basis[i] < eps] = 0.
+        else:
+            new_basis[i] /= norm(new_basis[i])
+    return new_basis
+
+def uniformize_data_on_references(data:np.ndarray, references:np.ndarray, orthonormalize_matrix:bool=True, project_in_reference_space:bool=True) -> np.ndarray:
+    """
+    * data: list of k points of size n, with shape (k, n) ;
+    * references: list of m points of size n, with shape (m, n) ;
+    * orthonormalize_matrix: bool ;
+    * project_in_reference_space: bool.\n
+    The min(m,n) 'raw' (if m>=n) XOR 'column' (if m<n) elements in references must be linearly independant!\n
+    Booleans 'orthonormalize_matrix' and 'project_in_reference_space' cannot be True at the same time (the first one is ignored if m>=n).
+    """
+    # convert arrays into usual ones
+    c = to_min_2D_vec(references)
+    p = to_min_2D_vec(data)
+
+    # get float resolution of base Matrix
+    if np.issubdtype(c.dtype, np.floating):
+        res = np.finfo(c.dtype).resolution
+    else:
+        res = np.finfo(np.float_).resolution
+    
+    # if asked, project data on references
+    if project_in_reference_space:
+        print("Data projected in orthonormalized references' space")
+        ref_base = orthonormalize(c.copy(), eps=res)
+        c = scalar(c[:, np.newaxis], ref_base)
+        p = scalar(p[:, np.newaxis], ref_base)
+    
+    # sizes of references
+    m, n = c.shape
+    dim = max(m, n)
+    
+    # build base Matrix from references
+    Mat = np.eye(dim, dtype=c.dtype)
+    Mat[:n, :m] = c.T #= (c/norm(c, keepdims=True)).T
+    
+    # if asked, Gram-Schmidt process on Matrix
+    if orthonormalize_matrix and dim > m:
+        print("Base Matrix orthonormalization applied along added unit vectors")
+        orth_Mat = orthonormalize(Mat.copy().T, eps=res).T
+        Mat[:, m:] = orth_Mat[:, m:]
+
+    # if Matrix is NOT invertible, non-linear transform
+    Mat_det = np.linalg.det(Mat)
+    if np.abs(Mat_det) < res:
+        print("Base Matrix built from 'references' is not invertible: non-linear transform applied")
+        proba = norm(c - p[:, np.newaxis])
+        proba = from_distance_to_probability(proba)
+        new_p = np.sum(c * proba[..., np.newaxis], axis=1)
+        return new_p
+
+    # if Matrix is invertible, compute its inverse
+    Mat_inv = np.linalg.inv(Mat)
+
+    # two cases: m <= n (linear transform possible) and m > n (not possible)
+    if m <= n:
+        # Linear transform
+        print("=> Linear transform")
+        new_p = scalar(p[:, np.newaxis], Mat_inv) #* np.abs(p) / np.max(np.abs(p), axis=0)
+    else:
+        # Non-linear transform
+        print("=> Non-linear transform")
+        proba = norm(p[:, np.newaxis] - c)
+        proba = from_distance_to_probability(proba)[:, n:]
+        extended_p = np.append(p, proba, axis=1)
+        new_p = scalar(extended_p[:, np.newaxis], Mat_inv)
+    
+    # Affine transform
+    #u = 1 / m * np.append([1]*m, [0]*(dim-m), axis=0)
+    #new_p = new_p - u
+    
+    return new_p
+
+# Functions to get data's class extrema from their distance to class polyhedra 
+# (are used as references to uniformize data in 'uniformize_data_on_references')
+
+def get_extrema_arg(distances:np.ndarray, n_elements_per_class:int=1) -> np.ndarray:
+    """
+    * distances: ndarray (n_data, n_classes) ;
+    * n_elements_per_class: int = 1.
+    """
+    if n_elements_per_class == 1:
+        return np.argmin(distances, axis=0)[np.newaxis]
+    return np.argsort(distances, axis=0)[:n_elements_per_class]
+
+def get_extrema_val(distances:np.ndarray, data:Optional[np.ndarray]=None, n_elements_per_class:int=1, element_mixing_func:Callable=np.mean) -> np.ndarray:
+    """
+    * distances: ndarray (n_data, n_classes) ;
+    * data (Optional): ndarray (n_data, ndim) ;
+    * n_elements_per_class: int = 1 ;
+    * element_mixing_func: Callable with arguments (array, axis).\n
+    If data is None, returns distance values, otherwise returns data values.
+    """
+    arg_extrema = get_extrema_arg(distances, n_elements_per_class)
+    if data is None:
+        return element_mixing_func(distances[arg_extrema], 0)
+    return element_mixing_func(data[arg_extrema], 0)
+
+###
+# Functions to compute Class Polyhedra! 
+# 3 methods to separate classes: 
+# -> using GMM to labellise data, then SVM to get frontier hyperplanes [unsupervised] ; 
+# -> using SVM only (to get frontier hyperplanes) on given class samples [supervised] ; 
+# -> using k-means to find centroids, then Voronoi diagram (hyperplanes) [unsupervised].
+###
+
+def from_n_classes_to_n_hyperplanes(n_classes:int) -> int:
+    return int(np.round(n_classes*(n_classes-1)/2))
+
+def from_n_hyperplanes_to_n_classes(n_hyperplanes:int) -> int:
+    return int(np.round((1+np.sqrt(8*n_hyperplanes))/2))
+
+def from_n_classes_to_n_half_spaces(n_classes:int) -> int:
+    return int(np.round(n_classes*(n_classes-1)))
+
+def distribute_half_spaces(h:np.ndarray, means:np.ndarray) -> np.ndarray:
+    """
+    h: (n_hyperplanes, 2, ndim)
+    means: (n_classes, ndim)
+    """
+    n_classes = means.shape[0] # = from_n_hyperplanes_to_n_classes(h.shape[0])
+    couple_id = list(itertools.combinations(np.arange(n_classes), 2))
+    new_h = np.empty(shape=(n_classes,n_classes-1)+h.shape[1:], dtype=h.dtype)
+    for k in range(h.shape[0]):
+        i, j = couple_id[k]
+        c, v = h[k]
+        v_ij = means[j] - means[i]
+        v_i = v * np.sign(scalar(v, v_ij))
+        v_j = v * np.sign(scalar(v,-v_ij))
+        h_i = np.asarray((c, v_i))
+        h_j = np.asarray((c, v_j))
+        new_h[i,j-1] = h_i
+        new_h[j,i] = h_j
+    return new_h
+
+# First method: GMM then SVM
+def class_polyhedra_GMM_SVM(
+        data:np.ndarray, 
+        init:int|np.ndarray=2, 
+        n_init:int=1, 
+        remove_unnecessary_couples:bool=True, 
+        infos:bool=True
+    ) -> list[np.ndarray]:
+    """
+    Computing 'n' polyhedron classes expressed by the intersection of half-spaces, 
+    using a Gaussian Mixture Model of 'n' mixture components on input 'data', and 
+    separating classes by hyperplanes computed from linear Support Vector Machine.\n
+    Returns list_of_class_polyhedra.
+    """
+    if type(init) is np.ndarray:
+        n = init.shape[0]
+        init_means = init
+    else:
+        n = int(np.round(init))
+        init_means = None
+    if infos:
+        print("Fitting GMM model on data...")
+    gmm = GaussianMixture(n_components=n, covariance_type='full', init_params='kmeans', n_init=n_init, means_init=init_means).fit(X=data)
+    if infos:
+        print("Predicting data on GMM model...")
+    GMM_labels = gmm.predict(X=data)
+    gmm_means = gmm.means_
+    if infos:
+        print("Computing SVM parameters...")
+    clf = svm.SVC(kernel='linear', decision_function_shape='ovo').fit(X=data, y=GMM_labels)
+    w, b = clf.coef_, clf.intercept_
+    if infos:
+        print("Converting hyperplane equations into hyperplane vectors...")
+    h_hyperplanes = to_half_space_couples(w, b)
+    if infos:
+        print("Converting hyperplanes into half-spaces...")
+    h_half_spaces = list(distribute_half_spaces(h_hyperplanes, gmm_means))
+    if remove_unnecessary_couples:
+        if infos:
+            print("Selecting only necessary half-space for each polyhedra...")
+        for _ in range(len(h_half_spaces)):
+            h0 = h_half_spaces.pop(0)
+            hp = keep_only_necessary_couples(h0)
+            h_half_spaces.append(hp)
+    if infos:
+        print("Done!")
+    return h_half_spaces
+
+# Second method: SVM on class samples (as windows in image 'img' of rectangle-coordinates 'coord')
+def class_polyhedra_WindowSample_SVM(
+        img:np.ndarray, 
+        coord:np.ndarray, 
+        remove_unnecessary_couples:bool=True, 
+        infos:bool=True
+    ) -> list[np.ndarray]:
+    """
+    Computing 'n' polyhedron classes expressed by the intersection of half-spaces, 
+    for which the hyperplanes are computed from linear Support Vector Machine on 
+    classes got from class-window crops on image 'img' given in crop coordinates 'coord'.\n
+    Returns list_of_class_polyhedra.
+    """
+    if infos:
+        print("Computing sample parameters...")
+    means = np.asarray([get_mean_from_box_coord (img, coord_i[0], coord_i[1]) for coord_i in coord])
+    #covar = np.asarray([get_covar_from_box_coord(img, coord_i[0], coord_i[1]) for coord_i in coord])
+    window_data = np.concatenate([get_data_from_box_coord(img, coord_i[0], coord_i[1]) for coord_i in coord], axis=0)
+    lens = [int(np.round((coord[i][0][0]-coord[i][1][0])*(coord[i][0][1]-coord[i][1][1]))) for i in range(len(coord))]
+    labl = np.concatenate([np.full(shape=(lens[i],), fill_value=i, dtype=int) for i in range(len(coord))], axis=0)
+    if infos:
+        print("Computing SVM parameters...")
+    clf = svm.SVC(kernel='linear', decision_function_shape='ovo').fit(X=window_data, y=labl)
+    w, b = clf.coef_, clf.intercept_
+    if infos:
+        print("Converting hyperplane equations into hyperplane vectors...")
+    h_hyperplanes = to_half_space_couples(w, b)
+    if infos:
+        print("Converting hyperplanes into half-spaces...")
+    h_half_spaces = list(distribute_half_spaces(h_hyperplanes, means))
+    if remove_unnecessary_couples:
+        if infos:
+            print("Selecting only necessary half-space for each polyhedra...")
+        for _ in range(len(h_half_spaces)):
+            h0 = h_half_spaces.pop(0)
+            hp = keep_only_necessary_couples(h0)
+            h_half_spaces.append(hp)
+    if infos:
+        print("Done!")
+    return h_half_spaces
+
+# Third method: k-means then Voronoi
+def class_polyhedra_Kmeans_Voronoi(
+        data:Optional[np.ndarray]=None, 
+        init:int|np.ndarray=2, 
+        n_init:Optional[int]=None, 
+        remove_unnecessary_couples:bool=True, 
+        infos:bool=True
+    ) -> list[np.ndarray]:
+    """
+    If 'init' is of type numpy.ndarray and 'data' is None, then 'init' array is kept as Voronoi centroids (no K-means).\n
+    Returns list_of_class_polyhedra.
+    """
+    if n_init is None:
+        n_init = 'auto'
+    if type(init) is np.ndarray:
+        n = init.shape[0]
+        if data is not None:
+            if infos:
+                print("Computing k-means centroids...")
+            means = KMeans(n_clusters=n, init=init, n_init=n_init).fit(data).cluster_centers_
+        else:
+            means = init
+    else:
+        n = int(np.round(init))
+        if data is not None:
+            if infos:
+                print("Computing k-means centroids...")
+            means = KMeans(n_clusters=n, init='k-means++', n_init=n_init).fit(data).cluster_centers_
+        else:
+            unit_base = np.eye(n) - 1 / n * np.ones(n)
+            proj_base = orthonormalize(unit_base[:-1]) / np.sqrt(2)
+            means = scalar(proj_base, unit_base[:,np.newaxis])
+    
+    # Computation of Voronoi polyhedra
+    if infos:
+        print(f"Computing Voronoi's class polyhedra from {'computed'*(data is not None)+'given'*(data is None)} centroids...")
+    n_means, ndim = means.shape
+    centers = np.tile(means, (n_means, 1, 1))
+    centers_refere = centers[:-1].transpose(1,0,2)
+    centers_target = centers[~np.eye(n_means, dtype=bool)].reshape(n_means, n_means-1, ndim)
+    c = np.empty(shape=centers_refere.shape, dtype=means.dtype)
+    np.divide(centers_refere + centers_target, 2, out=c, casting='unsafe')
+    v = normed(centers_target - centers_refere)
+
+    h_half_spaces = list(np.transpose((c,v), axes=(1,2,0,3))) # (nh, nh - 1, 2, ndim)
+
+    if remove_unnecessary_couples:
+        if infos:
+            print("Selecting only necessary half-space for each polyhedra...")
+        for _ in range(len(h_half_spaces)):
+            h = h_half_spaces.pop(0)
+            hp = keep_only_necessary_couples(h)
+            h_half_spaces.append(hp)
+    if infos:
+        print("Done!")
+    return h_half_spaces
+
+# Function to extract a random sample from data, which will be used to compute frontier hyperplanes in functions above
+
+def extract_random_sample(data:np.ndarray, prop:float=0.01, return_indices:bool=False) -> np.ndarray:
+    """
+    Function to extract a random sample from data, to compute class polyhedra (for GMM for example).
+    """
+    n = data.shape[0]
+    indices = random.sample(range(0,n), int(n*prop))
+    if return_indices:
+        return data[indices], indices
+    return data[indices]
+
+###
+# Functions to compute the minimum-norm points to polyhedra, and the associated distances (positive and negative)
+###
+
+def data_in_polyhedron(data:np.ndarray, polyhedron:np.ndarray) -> np.ndarray:
+    eps = np.finfo(data.dtype).resolution
+    data_in_poly = np.max(scalar(data[np.newaxis] - polyhedron[:,0,np.newaxis], polyhedron[:,1,np.newaxis]), axis=0) < eps
+    return data_in_poly
+
+def minimum_norm_point_to_polyhedra(data:np.ndarray, h:list[np.ndarray], infos:bool=True) -> np.ndarray:
+    """
+    * data: ndarray of points in ndim-dimensional real vector space,
+     with shape (n_samples, ndim) or (ndim,) ;
+    * h: list of polyhedra represented as intersection of half_spaces described by couples (c,v),
+     with shape n_classes * (n_half_spaces, 2, ndim) or (n_half_spaces, 2, ndim).\n
+    Returns ndarray of minimum-norm points from data to each class polyhedra, 
+    with shape (n_samples, n_classes, ndim) or (n_classes, ndim) or (n_samples, ndim) or (ndim,).
+    """
+    data_is_1D = data.ndim == 1
+    h_is_3D = type(h) is np.ndarray and h.ndim == 3
+
+    if data_is_1D:
+        data = data[np.newaxis]
+    if h_is_3D:
+        h = h[np.newaxis]
+
+    n_samples, ndim = data.shape
+    n_classes = len(h)
+
+    min_n_pts = np.empty(shape=(n_samples, n_classes, ndim), dtype=data.dtype)
+
+    estimated = False
+    start = time.time()
+
+    # For each polyhedron in h, compute the minimum-norm points for all points in data
+    for c in range(n_classes):
+
+        if infos:
+            print(f"Processing class: {c+1} / {n_classes}")
+        
+        # Get half-space vector couples forming the polyhedron related to class c
+        h_class = h[c]
+
+        # Directly associate p themselves to points p which belong to h_class
+        p_in_h = data_in_polyhedron(data=data, polyhedron=h_class)
+        min_n_pts[p_in_h,c] = data[p_in_h]
+        arg_data_not_in_h = np.argwhere(~p_in_h)[:,0]
+        n_samples_not_in_h = arg_data_not_in_h.shape[0]
+
+        # Compute corresponding minimum-norm points q to the other points p
+        for i in range(n_samples_not_in_h):
+            
+            # Estimate the computation time from the already-computed sample
+            if infos and not estimated and time.time() - start > 1:
+                delta_time = time.time() - start
+                total_iter = n_samples * n_classes
+                n_iter_now = c * n_samples + i
+                total_time = total_iter / n_iter_now * delta_time
+                if total_time > 60:
+                    total_time = total_time / 60
+                    if total_time > 60:
+                        total_time = total_time / 60
+                        unit = "hours"
+                    else:
+                        unit = "minutes"
+                else:
+                    unit = "seconds"
+                decimals = 2
+                total_time = np.round(total_time, decimals)
+                print(f"Estimated computation time: {total_time} {unit}")
+                estimated = True
+            
+            # Compute the minimum-norm point q from p to h_class with algo_0
+            arg = arg_data_not_in_h[i]
+            p = data[arg]
+            q, _ = algo_0(h_class, p, eps=1e-8)
+            min_n_pts[arg,c] = q
+
+    if infos:
+        print("Done!")
+    
+    if data_is_1D:
+        min_n_pts = min_n_pts[0]
+        if h_is_3D:
+            min_n_pts = min_n_pts[0]
+    elif h_is_3D:
+        min_n_pts = min_n_pts[:,0]
+
+    return min_n_pts
+
+def distance_to_polyhedra(data:np.ndarray, h:list[np.ndarray], infos:bool=True) -> np.ndarray:
+    """
+    * data: ndarray of points in ndim-dimensional real vector space,
+     with shape (n_samples, ndim) or (ndim,) ;
+    * h: list of polyhedra represented as intersection of half_spaces described by couples (c,v),
+     with shape n_classes * (n_half_spaces, 2, ndim) or (n_half_spaces, 2, ndim).\n
+    Returns ndarray of Euclidean distances from data to each class polyhedra, 
+    with shape (n_samples, n_classes) or (n_classes,) or (n_samples,) or scalar.
+    """
+    min_n_pts = minimum_norm_point_to_polyhedra(data, h, infos)
+    #min_n_pts,_ = minimum_norm_points_to_polyhedra([h[i][:,1] for i in range(len(h))], [scalar(h[i][:,0],h[i][:,1]) for i in range(len(h))], data) # for the C version!
+    distances = norm(min_n_pts - data[:,np.newaxis], keepdims=False)
+    return distances
+
+def add_negative_distance(data:np.ndarray, h:np.ndarray, distances:Optional[np.ndarray]=None) -> np.ndarray:
+    n_samples = data.shape[0] # = distances.shape[0]
+    n_classes = len(h) # = distances.shape[1]
+    if distances is None:
+        new_distances = np.zeros(shape=(n_samples, n_classes), dtype=data.dtype)
+    else:
+        new_distances = distances.copy()
+    eps = np.finfo(data.dtype).resolution
+    for c in range(n_classes):
+        h_class = h[c]
+        max_dist = np.max(scalar(data[np.newaxis] - h_class[:,0,np.newaxis], h_class[:,1,np.newaxis]), axis=0)
+        neg_data = max_dist < - eps
+        new_distances[neg_data,c] = max_dist[neg_data]
+    return new_distances
+
+###
+# Functions to turn distances (positive and/or negative) into probability map
+###
+
+def softmax_probability_map(distances:np.ndarray, multi:float=1, power:float=1) -> np.ndarray:
+    """
+    Turns a relative distance map into its corresponding probability map using softmax function.\n
+    Parameter:
+    * distance: map of relative distances (negative values accepted) with shape (nb_samples, nb_clusters)\n
+    Returns probability map computed with softmax function on relative distances, with shape (nb_samples, nb_clusters).
+    """
+    exp_distances = np.exp(multi * np.sign(distances) * np.abs(distances) ** power)
+
+    exp_sum = np.sum(exp_distances, axis=-1, keepdims=True)
+    exp_sum_inf  = (exp_sum == np.inf).reshape(exp_sum.shape[:-1])
+    exp_sum_zero = (exp_sum == 0     ).reshape(exp_sum.shape[:-1])
+    
+    exp_distances_max = exp_distances == exp_distances.max(axis=-1, keepdims=True)
+    exp_distances[exp_sum_inf] = exp_distances_max[exp_sum_inf]#.astype(exp_distances)
+    exp_sum[exp_sum_inf] = np.sum(exp_distances_max[exp_sum_inf], axis=-1, keepdims=True)
+
+    exp_distances[exp_sum_zero] = 1
+    exp_sum[exp_sum_zero] = distances.shape[-1]
+
+    return exp_distances / exp_sum
+
+def tanh_probability_map(distances:np.ndarray, multi:float=1, power:float=1) -> np.ndarray:
+    """
+    Turns a relative distance map into its corresponding probability map using tanh function.\n
+    Parameter:
+    * distance: map of relative distances (negative values accepted) with shape (nb_samples, nb_clusters)\n
+    Returns probability map computed with tanh function on relative distances, with shape (nb_samples, nb_clusters).
+    """
+    tanh_distance = 1 + np.tanh(multi * np.sign(distances) * np.abs(distances) ** power)
+
+    tanh_sum = np.sum(tanh_distance, axis=-1, keepdims=True)
+    tanh_sum_zero = (tanh_sum == 0).reshape(tanh_sum.shape[:-1])
+
+    tanh_distance[tanh_sum_zero] = 1
+    tanh_sum[tanh_sum_zero] = distances.shape[-1]
+
+    return tanh_distance / tanh_sum
+
+def from_distance_to_probability(distance:np.ndarray, dtype:Optional[type]=None) -> np.ndarray:
+    """
+    Turns a distance map into its corresponding probability map.\n
+    Parameter:
+    * distance: map of distances with shape (nb_samples, nb_clusters)\n
+    Returns ndarray of the probability of each point to belong to the clusters from their distance, with shape (nb_samples, nb_clusters).
+    """
+    if dtype is None:
+        dtype = distance.dtype
+    if not np.issubdtype(dtype, np.floating):
+        print("Warning: operation 'to_probability' may not be adapted for non-floating output dtype.")
+    if np.issubdtype(distance.dtype, np.floating):
+        eps = np.finfo(distance.dtype).resolution
+    else:
+        eps = 1
+    zero_distance = distance < eps
+    distance = distance * ~zero_distance
+    min_distance = distance.min(axis=-1, keepdims=True)
+    probability = np.empty(shape=distance.shape, dtype=dtype)
+    np.divide(min_distance + zero_distance, distance + zero_distance, out=probability, casting='unsafe')
+    np.divide(probability, probability.sum(axis=-1, dtype=dtype, keepdims=True), out=probability, casting='unsafe') # sum theoretically cannot be null
+    return probability
