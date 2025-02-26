@@ -586,15 +586,11 @@ def class_polyhedra_GMM_SVM(
         print("Computing SVM parameters...")
     clf = svm.SVC(kernel='linear', decision_function_shape='ovo').fit(X=data, y=GMM_labels)
     w, b = clf.coef_, clf.intercept_
-    if infos:
-        print("Converting hyperplane equations into hyperplane vectors...")
     h_hyperplanes = to_half_space_couples(w, b)
-    if infos:
-        print("Converting hyperplanes into half-spaces...")
     h_half_spaces = list(distribute_half_spaces(h_hyperplanes, gmm_means))
     if remove_unnecessary_couples:
         if infos:
-            print("Selecting only necessary half-space for each polyhedra...")
+            print("Computing minimum H-descriptions...")
         for _ in range(len(h_half_spaces)):
             h0 = h_half_spaces.pop(0)
             hp = keep_only_necessary_couples(h0)
@@ -627,15 +623,11 @@ def class_polyhedra_WindowSample_SVM(
         print("Computing SVM parameters...")
     clf = svm.SVC(kernel='linear', decision_function_shape='ovo').fit(X=window_data, y=labl)
     w, b = clf.coef_, clf.intercept_
-    if infos:
-        print("Converting hyperplane equations into hyperplane vectors...")
     h_hyperplanes = to_half_space_couples(w, b)
-    if infos:
-        print("Converting hyperplanes into half-spaces...")
     h_half_spaces = list(distribute_half_spaces(h_hyperplanes, means))
     if remove_unnecessary_couples:
         if infos:
-            print("Selecting only necessary half-space for each polyhedra...")
+            print("Computing minimum H-descriptions...")
         for _ in range(len(h_half_spaces)):
             h0 = h_half_spaces.pop(0)
             hp = keep_only_necessary_couples(h0)
@@ -692,7 +684,7 @@ def class_polyhedra_Kmeans_Voronoi(
 
     if remove_unnecessary_couples:
         if infos:
-            print("Selecting only necessary half-space for each polyhedra...")
+            print("Computing minimum H-descriptions...")
         for _ in range(len(h_half_spaces)):
             h = h_half_spaces.pop(0)
             hp = keep_only_necessary_couples(h)
