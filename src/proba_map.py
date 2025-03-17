@@ -758,7 +758,7 @@ def minimum_norm_point_to_polyhedra(data:np.ndarray, h:list[np.ndarray], infos:b
         for i in range(n_samples_not_in_h):
             
             # Estimate the computation time from the already-computed sample
-            if infos and not estimated and time.time() - start > 1:
+            if infos and not estimated and time.time() - start > 1 and (i>0 or c>0):
                 delta_time = time.time() - start
                 total_iter = n_samples * n_classes
                 n_iter_now = c * n_samples + i
