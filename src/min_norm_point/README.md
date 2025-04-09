@@ -6,7 +6,7 @@ This folder "min_norm_point/" must contain a total of 7 files:
 * "__init__.py": the initialization file to use this foler "min_norm_point/" as a Python library and directly import the function "minimum_norm_points_to_polyhedra" from min_norm_point ;
 * "setup.py": the C-to-Python configuration file, allowing one to use "minimum_norm_points_to_polyhedra_py" function from the C file in an independant Python file as a Python function ;
 * "pyproject.toml": needed file for the C compilation indicating the needed Python libraries and the backend for setup.py ;
-* if it has already been generated, the "min_norm_point_module.<cpython-...>.so" for a Python use of the implemented functions in C: it is recomended to remove it (with: python setup.py clean --all ; rm -rf build) and generate it again with your own configurations in "setup.py" (with: python setup.py build_ext --inplace) ;
+* (optional) if it has already been generated, the "min_norm_point_module.<cpython-...>.so" for a Python use of the implemented functions in C: it is recomended to remove it (with: python setup.py clean --all ; rm -rf build) and generate it again with your own configurations in "setup.py" (with: python setup.py build_ext --inplace) ;
 * this "README.md" file.
 
 Please make sure you have:
