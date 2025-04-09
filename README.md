@@ -2,7 +2,7 @@
 
 Code for blind polyhedral unmixing of spectral images.
 
-Example with the application of the method on the Samson and Battery datasets (notebooks "example_<...>.ipynb").
+Example with the application of the method on the Samson and Battery datasets (notebooks).
 
 The repository is organised as follows:
 * datasets: folder containing the Samson dataset (Y) with the ground truth (endmembers M and abundances A) in Matlab format, and an original grayscale image of the chemical medium of a Lithium-ion battery captured by X-ray nano-CT in Numpy format ;
@@ -11,7 +11,7 @@ The repository is organised as follows:
 * requirements.txt: list of the required Python packages ;
 * README.md: this current file containing informations about this repository.
 
-To install the required Python libraries:
+To install the required Python packages:
 * pip install -r requirements.txt
 * pip install ./src/min_norm_point
 
