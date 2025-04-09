@@ -2,7 +2,7 @@
 
 Code for blind polyhedral unmixing of spectral images.
 
-Example with the application of the method on the Samson and Battery datasets (notebooks).
+Example with the application of the method on the Samson and Battery datasets (check notebooks).
 
 The repository is organised as follows:
 * datasets: folder containing the Samson dataset (Y) with the ground truth (endmembers M and abundances A) in Matlab format, and an original grayscale image of the chemical medium of a Lithium-ion battery captured by X-ray nano-CT in Numpy format ;
