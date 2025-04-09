@@ -15,7 +15,7 @@ Please make sure you have:
 You can make sure that the .so file has been correctly generated and contains the needed modules by using the command: ldd min_norm_point_module.cpython-310-x86_64-linux-gnu.so, and checking if the asked modules appear (libglpk.so).
 
 If everything is well configurated for your own use, you will only have to import the main function "minimum_norm_points_to_polyhedra" from the Pyhton file "min_norm_point" in your Python file or notebook, with simply: 
-from min_norm_point_C.min_norm_point import minimum_norm_points_to_polyhedra
+from min_norm_point import minimum_norm_points_to_polyhedra
 
 For any question, you can contact the author at: antoine.bottenmuller@gmail.com
 

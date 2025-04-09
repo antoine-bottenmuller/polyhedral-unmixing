@@ -24,11 +24,12 @@ def mres(array:np.ndarray, upmul:int=0) -> float:
 
 # Definition de la fonction principale en Python
 def minimum_norm_points_to_polyhedra(
+        points:np.ndarray, 
         V:list[np.ndarray]|np.ndarray, 
         s:list[np.ndarray]|np.ndarray, 
-        points:np.ndarray, 
         res:Optional[float]=None, 
-        method:Literal["0","1","2","3"]="0"
+        method:Literal["0","1","2","3"]="0", 
+        infos:bool=True
 ) -> np.ndarray:
     """
     * (V,s): list of arrays of vector-scalar couples (v,s) defining a list of polyhedra,
@@ -97,7 +98,8 @@ def minimum_norm_points_to_polyhedra(
     )
 
     dt = time.time() - st
-    #print("Computation time:", dt, "seconds.")
+    if infos:
+        print("Computation time:", dt, "seconds.")
 
     # Redimensionnement de la sortie
     min_n_pts = min_n_pts.reshape(n_points, n_polyhedra, cols)
