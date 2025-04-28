@@ -742,7 +742,12 @@ def distance_to_polyhedra(data:np.ndarray, h:list[np.ndarray], infos:bool=True) 
         print(f"Warning: list of polyhedra considered as containing a single polyhedron.")
         h = h[np.newaxis]
     if data.shape[-1] == 1:
-        return np.asarray([scalar(data[:,np.newaxis] - hi[:,0], normed(hi[:,1])).max(axis=-1) for hi in h]).T
+        if infos:
+            print("Computing 1D distances...", end=' ')
+        distances = np.asarray([scalar(data[:,np.newaxis] - hi[:,0], normed(hi[:,1])).max(axis=-1) for hi in h]).T
+        if infos:
+            print("Done!")
+        return distances
     min_n_pts = minimum_norm_points_to_polyhedra_PYTHON(data, h, infos=infos) # PYTHON VERSION
     #min_n_pts, _ = minimum_norm_points_to_polyhedra(data, [h[i][:,1] for i in range(len(h))], [scalar(h[i][:,0],h[i][:,1]) for i in range(len(h))], infos=infos) # C VERSION
     distances = norm(min_n_pts - data[:,np.newaxis], keepdims=False)
