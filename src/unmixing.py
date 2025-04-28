@@ -730,15 +730,19 @@ def distance_to_polyhedra(data:np.ndarray, h:list[np.ndarray], infos:bool=True) 
     """
     * data: ndarray of points in ndim-dimensional real vector space,
      with shape (n_samples, ndim) or (ndim,) ;
-    * h: list of polyhedra represented as intersection of half_spaces described by couples (c,v),
+    * h: list of non-empty polyhedra defined as the intersection of half_spaces described by couples (c,v),
      with shape n_classes * (n_half_spaces, 2, ndim) or (n_half_spaces, 2, ndim).\n
-    Returns ndarray of Euclidean distances from data to each class polyhedra, 
+    Returns ndarray of the Euclidean distances from data to each polyhedron, 
     with shape (n_samples, n_classes) or (n_classes,) or (n_samples,) or scalar.
     """
     if data.ndim == 1:
+        print(f"Warning: data shape considered as (1, {data.shape[0]}).")
         data = data[np.newaxis]
     if type(h) is np.ndarray and h.ndim == 3:
+        print(f"Warning: list of polyhedra considered as containing a single polyhedron.")
         h = h[np.newaxis]
+    if data.shape[-1] == 1:
+        return np.asarray([scalar(data[:,np.newaxis] - hi[:,0], normed(hi[:,1])).max(axis=-1) for hi in h]).T
     min_n_pts = minimum_norm_points_to_polyhedra_PYTHON(data, h, infos=infos) # PYTHON VERSION
     #min_n_pts, _ = minimum_norm_points_to_polyhedra(data, [h[i][:,1] for i in range(len(h))], [scalar(h[i][:,0],h[i][:,1]) for i in range(len(h))], infos=infos) # C VERSION
     distances = norm(min_n_pts - data[:,np.newaxis], keepdims=False)
