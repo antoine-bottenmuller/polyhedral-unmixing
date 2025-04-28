@@ -735,6 +735,10 @@ def distance_to_polyhedra(data:np.ndarray, h:list[np.ndarray], infos:bool=True) 
     Returns ndarray of Euclidean distances from data to each class polyhedra, 
     with shape (n_samples, n_classes) or (n_classes,) or (n_samples,) or scalar.
     """
+    if data.ndim == 1:
+        data = data[np.newaxis]
+    if type(h) is np.ndarray and h.ndim == 3:
+        h = h[np.newaxis]
     min_n_pts = minimum_norm_points_to_polyhedra_PYTHON(data, h, infos=infos) # PYTHON VERSION
     #min_n_pts, _ = minimum_norm_points_to_polyhedra(data, [h[i][:,1] for i in range(len(h))], [scalar(h[i][:,0],h[i][:,1]) for i in range(len(h))], infos=infos) # C VERSION
     distances = norm(min_n_pts - data[:,np.newaxis], keepdims=False)
