@@ -44,7 +44,7 @@ The Polyhedral unmixing model follows the pipeline illustrated in the figure bel
 
 From a given input **spectral dataset** (col. 1.) and **classification map** (or clustering model) with $m$ materials (col. 2.), the model first determines a **polyhedral partition** of the spectral space $\mathbb{R}^d$ (col. 3.) that best fits the labeled pixels, as an approximation of the true dominant-material regions. 
 
-**Signed distances** to the $m$ polyhedral sets are then computed for each pixel (col. 4.); a **change of basis** is performed in the signed-distance space $\mathbb{R}^m$ with extremal-distance vectors as new basis (col. 5.); and the **projection** of the new data onto the probability simplex finally yields an **initial abundance estimate** $\hat{A}_\text{init}$ (col. 6.). 
+**Signed distances** to the $m$ polyhedral sets are then computed for each pixel (col. 4.); a **change of basis** is performed in the signed-distance space $\mathbb{R}^m$ with extremal-distance vectors as new basis (col. 5.); and the new data is **projected** onto the probability simplex, finally yielding an **initial abundance estimate** $\hat{A}_\text{init}$ (col. 6.). 
 
 Under linear independence of the endmembers, an **endmember estimate** $\hat{M}$ and **final abundances** $\hat{A}$ can be deduced from $\hat{A}_\text{init}$ via matrix pseudo-inversion. 
 
@@ -63,9 +63,10 @@ See papers **[1]**, **[2]** for a detailed method presentation.
   - `metrics.py`: Evaluation of unmixing results.
   - `polyset.py`: Functions for polyhedral computation.
   - `min_norm_point_PYTHON.py`: Minimum-norm point algorithm in Python.
-  - `min_norm_point/`: Minimum-norm point algorithm implemented in C (requires compilation).
-- **example_<...>.ipynb**: Example notebooks applying the functions to datasets, with results.
+  - `min_norm_point/`: Minimal-norm point algorithm implemented in C (requires compilation).
+- **example_<...>.ipynb**: Example notebooks applying the unmixing model to datasets, with results.
 - **requirements.txt**: List of required Python packages.
+- **LICENSE**: MIT license for this software.
 - **README.md**: This file.
 
 ## Creating a Virtual Environment (venv)
