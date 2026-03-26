@@ -89,7 +89,7 @@ If needed, you may also use the Python version of the algorithm (`min_norm_point
 
 ## Using the Code
 
-Please download and drop the datasets in the **datasets/** folder (see datasets/README.md). 
+Please download and drop the datasets in the **datasets/** folder (see `datasets/README.md`). 
 This may be done either manually or automatically using the **load** functions provided in `datasets.py`. 
 Then, open and run one of the three Notebooks as an example.
 
@@ -107,7 +107,7 @@ Then, **fit** the model by passing the indicated arguments and **predict** unmix
 
 ### **1.** Predict both endmembers and abundances **[1]**
 
-Under linear independence of the endmembers, both endmembers $`\hat{M}`$ and abundances $`\hat{A}`$ can be estimated via matrix pseudo-inversion from an inital abundance estimate $`\hat{A}_\text{init}`$ given by the Polyhedral model over $`Y`$. See paper **[1]**. Use the following functions to **(i) fit** the model and **(ii) predict** endmembers and associated abundances.
+Under linear independence of the endmembers, both endmembers $`\hat{M}`$ and abundances $`\hat{A}`$ can be estimated via matrix pseudo-inversion from an inital abundance estimate $`\hat{A}_\text{init}`$ computed by the Polyhedral model over $`Y`$. See paper **[1]**. Use the following functions to **(i) fit** the model and **(ii) predict** endmembers and associated abundances.
 
 **$`\Rightarrow`$ Fit the model:**
 ```python
@@ -116,10 +116,10 @@ model.fit(*args)
 
 **$`\Rightarrow`$ Predict endmembers and abundances:**
 ```python
-model.predict(Y)
+M_hat, A_hat = model.predict(Y)
 ```
 
-You can also use **model.fit_predict(Y, \*args)** to fit and predict at the same time.
+You can also use **M_hat, A_hat = model.fit_predict(Y, \*args)** to fit and predict at the same time.
 
 ### **2.** Predict initial abundances alone **[2]**
 
@@ -132,10 +132,10 @@ model.fit_initial(*args)
 
 **$`\Rightarrow`$ Predict initial abundances:**
 ```python
-model.predict_initial_abundances(Y)
+A_init = model.predict_initial_abundances(Y)
 ```
 
-You can also use **model.fit_predict_initial_abundances(Y, \*args)** to fit and predict at the same time.
+You can also use **A_init = model.fit_predict_initial_abundances(Y, \*args)** to fit and predict at the same time.
 
 ## References
 
