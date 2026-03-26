@@ -99,7 +99,7 @@ To use the main unmixing model, import the **PolyhedralUnmixingModel** class and
 from src.unmixing import PolyhedralUnmixingModel
 
 # Initialize the model with given arguments
-model = PolyhedralUnmixingModel(init_args)
+model = PolyhedralUnmixingModel(*init_args)
 ```
 Then, **fit** the model by passing the indicated arguments and **predict** unmixing matrices over your input spectral image. 
 
@@ -111,7 +111,7 @@ Under linear independence of the endmembers, both endmembers $\hat{M}$ and abund
 
 **$\Rightarrow$ Fit the model:**
 ```python
-model.fit(args)
+model.fit(*args)
 ```
 
 **$\Rightarrow$ Predict endmembers and abundances:**
@@ -119,7 +119,7 @@ model.fit(args)
 model.predict(Y)
 ```
 
-You can also use **model.fit_predict(Y, args)** to fit and predict at the same time.
+You can also use **model.fit_predict(Y, \*args)** to fit and predict at the same time.
 
 ### **2.** Predict initial abundances alone **[2]**
 
@@ -127,7 +127,7 @@ Under linear dependence of the endmembers, matrix pseudo-inversion is either not
 
 **$\Rightarrow$ Fit the model** (optional, if .fit has not been used yet)**:**
 ```python
-model.fit_initial(args)
+model.fit_initial(*args)
 ```
 
 **$\Rightarrow$ Predict initial abundances:**
@@ -135,7 +135,7 @@ model.fit_initial(args)
 model.predict_initial_abundances(Y)
 ```
 
-You can also use **model.fit_predict_initial_abundances(Y, args)** to fit and predict at the same time.
+You can also use **model.fit_predict_initial_abundances(Y, \*args)** to fit and predict at the same time.
 
 ## References
 
