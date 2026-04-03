@@ -77,13 +77,14 @@ def change_of_basis(data:np.ndarray, new_basis:np.ndarray) -> np.ndarray:
     # if new_basis is NOT invertible, add a little shift
     Mat_det = np.linalg.det(new_basis)
     if np.abs(Mat_det) < res:
+        add_res = 1e-3 * (new_basis.max() - new_basis.min())
 
-        # shift data and new_basis by 10 * dtype_resolution
-        data = data + 1e1 * res
-        new_basis = new_basis + 1e1 * res
-        Mat_det = np.linalg.det(new_basis)
+        # shift data and new_basis by add_res
+        data = data + 1e1 * add_res
+        new_basis = new_basis + 1e1 * add_res
 
         # if new_basis is STILL NOT invertible, raise Error
+        Mat_det = np.linalg.det(new_basis)
         if np.abs(Mat_det) < res:
             raise ValueError("New basis must have full rank!")
 
