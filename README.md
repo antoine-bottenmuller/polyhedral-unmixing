@@ -1,4 +1,4 @@
-# polyhedral-unmixing
+# Polyhedral Unmixing
 
 Python code for **Polyhedral Unmixing**: unsupervised segmentation-to-unmixing model for linear spectral unmixing via polyhedral partitioning of space.
 
