@@ -12,7 +12,7 @@ If you find the code useful, please cite us as follows.
 
 ```
 @article{..., 
-  author = {Bottenmuller, Antoine and Decenci\`ere, Etienne and Dokladal, Petr}, 
+  author = {Bottenmuller, Antoine and Decenci\`ere, Etienne and Dokl\'adal, Petr}, 
   title = {Polyhedral Unmixing ...}, 
   year = {2026}
 }
@@ -20,7 +20,7 @@ If you find the code useful, please cite us as follows.
 
 ```
 @article{..., 
-  author = {Bottenmuller, Antoine and Decenci\`ere, Etienne and Dokladal, Petr}, 
+  author = {Bottenmuller, Antoine and Decenci\`ere, Etienne and Dokl\'adal, Petr}, 
   title = {Abundance Estimation ...}, 
   year = {2027}
 }
@@ -62,8 +62,9 @@ See papers **[1]**, **[2]** for a detailed method presentation.
   - `display.py`: Displaying datasets and results.
   - `metrics.py`: Evaluation of unmixing results.
   - `polyset.py`: Functions for polyhedral computation.
-  - `min_norm_point_PYTHON.py`: Minimum-norm point algorithm in Python.
-  - `min_norm_point/`: Minimal-norm point algorithm implemented in C (requires compilation).
+  - `min_norm_point_DAQP.py`: Minimal-norm point algorithm using DAQP solver.
+  - `min_norm_point_PYTHON.py`: Minimal-norm point algorithm using our own solver in Python.
+  - `min_norm_point_C/`: Minimal-norm point algorithm using our own solver in C (requires compilation).
 - **example_<...>.ipynb**: Example notebooks applying the unmixing model to datasets, with results.
 - **requirements.txt**: List of required Python packages.
 - **LICENSE**: MIT license for this software.
@@ -79,13 +80,18 @@ source env/bin/activate   # activate environment
 ## Installing Dependencies
 
 ```bash
-pip install -r requirements.txt      # install Python packages
+pip install -r requirements.txt   # install Python packages
+```
+
+In order to use the C version of our minimal-norm point solver, please install GLPK and compile the `min_norm_point` package using the following commands (for Linux):
+```bash
+sudo apt-get install glpk-utils libglpk-dev glpk-doc   # install GLPK
 pip install ./src/min_norm_point_C   # compile & install C minimal-norm point package
 ```
 
 ⚠️ If the second command fails, follow the instructions in `src/min_norm_point_C/README.md` for manual compilation.
 
-If needed, you may also use the Python version of the algorithm (`min_norm_point_PYTHON.py`), but note that it is about **100× slower**.
+You may also use either DAQP (`min_norm_point_DAQP.py`) or the Python version of our MNP algorithm (`min_norm_point_PYTHON.py`) instead, but note that the latter is about **100× slower** than the C version.
 
 ## Using the Code
 
