@@ -13,9 +13,12 @@ from typing import Tuple, Literal, Optional, Callable, Protocol, Any
 from src.polyset import scalar, norm, normed
 from src.polyset import to_half_space_pairs, distribute_halfspaces, keep_only_necessary_pairs
 
-from src.min_norm_point_PYTHON import minimum_norm_points_to_polyhedra_PYTHON # PYTHON VERSION
+try: from src.min_norm_point_PYTHON import minimum_norm_points_to_polyhedra_PYTHON # PYTHON VERSION
+except Exception: warnings.warn("Failed loading the Python version of the minimum-norm point algorithm.")
 try: from min_norm_point import minimum_norm_points_to_polyhedra # C VERSION 
-except Exception: warnings.warn("Failed loading the C version of the minimum-norm point function.")
+except Exception: warnings.warn("Failed loading the C version of the minimum-norm point algorithm.")
+try: from src.min_norm_point_DAQP import minimum_norm_points_to_polyhedra_DAQP # DAQP solver
+except Exception: warnings.warn("Failed loading DAQP solver for the minimum-norm point problem")
 
 
 #%%
@@ -74,19 +77,39 @@ def change_of_basis(data:np.ndarray, new_basis:np.ndarray) -> np.ndarray:
     else:
         res = np.finfo(np.floating).resolution
     
+    # adjust data and new_basis range of values
+    adjust_val = np.max(norm(new_basis))
+    data /= max(adjust_val, res)
+    new_basis /= max(adjust_val, res)
+
     # if new_basis is NOT invertible, add a little shift
     Mat_det = np.linalg.det(new_basis)
     if np.abs(Mat_det) < res:
-        add_res = 1e-3 * (new_basis.max() - new_basis.min())
+        
+        add_res = 1e-3 * np.max(np.abs(new_basis))
+        if add_res < 1e-6: add_res = 1e-6
 
-        # shift data and new_basis by add_res
-        data = data + 1e1 * add_res
-        new_basis = new_basis + 1e1 * add_res
-
-        # if new_basis is STILL NOT invertible, raise Error
-        Mat_det = np.linalg.det(new_basis)
+        # if new_basis is STILL NOT invertible, add Tikhonov regularization
+        Mat_det = np.linalg.det(new_basis + 1e1 * add_res)
         if np.abs(Mat_det) < res:
-            raise ValueError("New basis must have full rank!")
+            warnings.warn("New basis is not full rank!")
+            
+            # Tikhonov regularization on new basis
+            tikhonov_param = add_res
+            new_basis = new_basis + tikhonov_param * np.eye(N=new_basis.shape[0], dtype=new_basis.dtype)
+            
+            while np.abs(np.linalg.det(new_basis)) < res and tikhonov_param < 1.0: # 20 iter max
+                tikhonov_param *= 2
+                new_basis = new_basis + tikhonov_param * np.eye(N=new_basis.shape[0], dtype=new_basis.dtype)
+            
+            if tikhonov_param >= 1.0:
+                if np.abs(np.linalg.det(new_basis)) < res:
+                    raise ValueError("New basis cannot be inverted even with Tikhonov regularization!")
+        
+        else:
+            # shift data and new_basis by 10 * add_res
+            data = data + 1e1 * add_res
+            new_basis = new_basis + 1e1 * add_res
 
     # if new_basis is invertible, compute its inverse
     Mat_inv = np.linalg.inv(new_basis)
@@ -524,22 +547,30 @@ def extract_random_sample(
 ###
 
 # Computes the Euclidean distance between points and polyhedral sets
-def distance_to_polyhedra(data:np.ndarray, h:list[np.ndarray], python:bool=True, infos:bool=True) -> np.ndarray:
+def distance_to_polyhedra(data:np.ndarray, h:list[np.ndarray], MNP_algo:Literal['MNP_Python','MNP_C','DAQP','auto']='auto', infos:bool=True) -> np.ndarray:
     """
     * data: ndarray of points in ndim-dimensional real vector space,
      with shape (n_samples, ndim) or (ndim,) ;
     * h: list of polyhedra represented as intersection of half_spaces described by couples (c,v),
-     with shape n_classes * (n_half_spaces, 2, ndim) or (n_half_spaces, 2, ndim).\n
+     with shape n_classes * (n_half_spaces, 2, ndim) or (n_half_spaces, 2, ndim) ;
+    * MNP_algo: algorithm to use to solve the Minimum-Norm Problem.\n
     Returns ndarray of Euclidean distances from data to each class polyhedra, 
     with shape (n_samples, n_classes) or (n_classes,) or (n_samples,) or scalar.
     """
-    if python:
+    if MNP_algo.lower() == 'auto'.lower():
+        try: return distance_to_polyhedra(data=data, h=h, MNP_algo='MNP_C', infos=infos)
+        except: 
+            try: return distance_to_polyhedra(data=data, h=h, MNP_algo='DAQP', infos=infos)
+            except: return distance_to_polyhedra(data=data, h=h, MNP_algo='MNP_Python', infos=infos)
+    if MNP_algo.lower() == 'MNP_Python'.lower():
+        try: minimum_norm_points_to_polyhedra_PYTHON
+        except: raise Exception("The Python function 'minimum_norm_points_to_polyhedra_PYTHON' has not been properly imported")
         min_n_pts = minimum_norm_points_to_polyhedra_PYTHON(
             data = data, 
             h = h, 
             infos = infos
         ) # PYTHON VERSION
-    else:
+    elif MNP_algo.lower() == 'MNP_C'.lower():
         try: minimum_norm_points_to_polyhedra
         except: raise Exception("The C function 'minimum_norm_points_to_polyhedra' has not been properly imported")
         min_n_pts, _ = minimum_norm_points_to_polyhedra(
@@ -548,6 +579,16 @@ def distance_to_polyhedra(data:np.ndarray, h:list[np.ndarray], python:bool=True,
             points = data, 
             infos = infos
         ) # C VERSION
+    elif MNP_algo.lower() == 'DAQP'.lower():
+        try: minimum_norm_points_to_polyhedra_DAQP
+        except: raise Exception("Function 'minimum_norm_points_to_polyhedra_DAQP' has not been properly imported")
+        min_n_pts = minimum_norm_points_to_polyhedra_DAQP(
+            data = data, 
+            h = h, 
+            infos = infos
+        ) # DAQP VERSION
+    else:
+        raise ValueError("Parameter 'MNP_algo' must be either 'MNP_Python', 'MNP_C', 'DAQP' or 'auto")
     distances = norm(min_n_pts - data[:,np.newaxis], keepdims=False)
     return distances
 
@@ -571,12 +612,13 @@ def add_negative_distance(data:np.ndarray, h:np.ndarray, distances:Optional[np.n
     return new_distances
 
 # Compute signed distances (positive and negative) from points to polyhedra
-def signed_distances_to_polyhedra(data:np.ndarray, h:list[np.ndarray], python:bool=True, infos:bool=True) -> np.ndarray:
+def signed_distances_to_polyhedra(data:np.ndarray, h:list[np.ndarray], MNP_algo:Literal['MNP_Python','MNP_C','DAQP','auto']='auto', infos:bool=True) -> np.ndarray:
     """
     * data: ndarray of points in ndim-dimensional real vector space,
      with shape (n_samples, ndim) or (ndim,) ;
     * h: list of polyhedra represented as intersection of half_spaces described by couples (c,v),
-     with shape n_classes * (n_half_spaces, 2, ndim) or (n_half_spaces, 2, ndim).\n
+     with shape n_classes * (n_half_spaces, 2, ndim) or (n_half_spaces, 2, ndim) ;
+    * MNP_algo: algorithm to use to solve the Minimum-Norm Problem.\n
     Returns ndarray of signed Euclidean distances from data to each class polyhedra, 
     with shape (n_samples, n_classes) or (n_classes,) or (n_samples,) or scalar.
     """
@@ -584,7 +626,7 @@ def signed_distances_to_polyhedra(data:np.ndarray, h:list[np.ndarray], python:bo
     except: raise ValueError("Cannot convert sub-arrays of h into numpy arrays")
     if arr2D.ndim == 2: h = [h]
     elif arr2D.ndim != 3: raise ValueError("h must be of dimension 3 or 4")
-    distances = distance_to_polyhedra(data, h, python, infos)
+    distances = distance_to_polyhedra(data, h, MNP_algo, infos)
     distances = add_negative_distance(data, h, distances)
     return distances
 
@@ -642,21 +684,36 @@ def from_Vb_to_CV(Vb:np.ndarray) -> np.ndarray:
     C = V * Vb[:, np.newaxis, -1:]
     return np.append(C, V, axis = 1)
 
-def simplex_projection(x:np.ndarray, pdis:float=1.0, python:bool=True) -> np.ndarray:
+def simplex_projection(x:np.ndarray, pdis:float=1.0, MNP_algo:Literal['MNP_Python','MNP_C','DAQP','auto']='auto') -> np.ndarray:
     m = x.shape[-1]
     y = x + (pdis - np.sum(x, axis=-1, keepdims=True)) * np.ones(m) / m
     hVb = simplex_frontier_hyperplanes(m, pdis)
-    if python:
+    if MNP_algo == 'auto':
+        try: p,_ = minimum_norm_points_to_polyhedra(hVb[:,:-1], hVb[:,-1], y, infos=False)
+        except:
+            try: p = minimum_norm_points_to_polyhedra_DAQP(y, from_Vb_to_CV(hVb), infos=False)
+            except: p = minimum_norm_points_to_polyhedra_PYTHON(y, from_Vb_to_CV(hVb), infos=False)
+    elif MNP_algo == 'MNP_Python':
+        try: minimum_norm_points_to_polyhedra_PYTHON
+        except: raise Exception("The Python function 'minimum_norm_points_to_polyhedra_PYTHON' has not been properly imported")
         p = minimum_norm_points_to_polyhedra_PYTHON(y, from_Vb_to_CV(hVb), infos=False)
-    else:
+    elif MNP_algo == 'MNP_C':
+        try: minimum_norm_points_to_polyhedra
+        except: raise Exception("The C function 'minimum_norm_points_to_polyhedra' has not been properly imported")
         p,_ = minimum_norm_points_to_polyhedra(hVb[:,:-1], hVb[:,-1], y, infos=False)
+    elif MNP_algo == 'DAQP':
+        try: minimum_norm_points_to_polyhedra_DAQP
+        except: raise Exception("Function 'minimum_norm_points_to_polyhedra_DAQP' has not been properly imported")
+        p = minimum_norm_points_to_polyhedra_DAQP(y, from_Vb_to_CV(hVb), infos=False)
+    else:
+        raise ValueError("Parameter 'MNP_algo' must be either 'MNP_Python', 'MNP_C', 'DAQP' or 'auto")
     return p / pdis
 
-def to_probability(x:np.ndarray, saturation:float=1.0, python:bool=True) -> np.ndarray:
+def to_probability(x:np.ndarray, saturation:float=1.0, MNP_algo:Literal['MNP_Python','MNP_C','DAQP','auto']='auto') -> np.ndarray:
     """
     Function that projects x data onto the probability simplex.
     """
-    exp_x = simplex_projection(x * saturation, python=python)
+    exp_x = simplex_projection(x * saturation, MNP_algo=MNP_algo)
 
     exp_sum = np.sum(exp_x, axis=-1, keepdims=True)
     exp_sum_inf  = (exp_sum == np.inf).reshape(exp_sum.shape[:-1])
@@ -690,7 +747,7 @@ class PolyhedralUnmixingModel:
             normalize: bool = True, 
             PCA_ndim: Optional[int] = None, 
             keep_normalized: bool = True, 
-            only_python: bool = True, 
+            MNP_algo: Literal['MNP_Python','MNP_C','DAQP','auto'] = 'auto', 
             saturation: float = 1.0, 
             verbose: bool = True
     ) -> None:
@@ -708,9 +765,9 @@ class PolyhedralUnmixingModel:
         * keep_normalized : bool, default: True
             Whether to apply matrix pseudo-inversions over the original or 
             normalized version of the input.
-        * only_python : bool, default: True
-            Whether to use the Python or C code for the nearest-point problem. 
-            The C version is about 100x faster.
+        * MNP_algo : str in {'MNP_Python','MNP_C','DAQP','auto'}, default: 'auto'
+            Solver for the minimum-norm point problem in a convex polyhedron. 
+            C is ~100x faster than Python.
         * saturation : float, default: 1.0
             Saturation scale hyperparameter. 
             It pushes the distance points closer to the simplex edges.
@@ -735,7 +792,7 @@ class PolyhedralUnmixingModel:
         self.polyhedral_method: Literal['biased_SVM','unbiased_SVM','auto'] = None
         self.polyhedral_prop: float = None
 
-        self.only_python: bool = only_python
+        self.MNP_algo: Literal['MNP_Python','MNP_C','DAQP','auto'] = MNP_algo
 
         self.saturation: float = saturation
         self.keep_normalized: bool = keep_normalized
@@ -823,7 +880,7 @@ class PolyhedralUnmixingModel:
 
         # 2. dimensionality reduction via PCA
         if PCA_ndim is not None and PCA_ndim > 0:
-            tdata = new_data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+            tdata = new_data.reshape(-1, data.shape[-1])
             if predict_mode:
                 pca = self.PCA
             else:
@@ -859,7 +916,7 @@ class PolyhedralUnmixingModel:
         ----------
         * data : ndarray
             Spectral data of shape (..., n_bands).
-        * method : ModelProtocol, Callable or in {'k-means','GMM'}, default: None
+        * method : ModelProtocol, Callable or str in {'k-means','GMM'}, default: None
             Method for data clustering. 
             If ModelProtocol, it must respect the construction of ModelProtocol.
         * classes : int (> 0) or ndarray, default: None
@@ -948,7 +1005,7 @@ class PolyhedralUnmixingModel:
         else: class_type = 0
 
         # Clustering: label the pixels into m clusters
-        tdata = data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+        tdata = data.reshape(-1, data.shape[-1])
 
         if predict_mode:
             model = self.clustering_model
@@ -978,7 +1035,7 @@ class PolyhedralUnmixingModel:
                 else:
                     raise ValueError("Parameter '" + ("self.clustering_method" if predict_mode else "method") + "', if string, must be either 'k-means' or 'GMM'.")
             
-            else: 
+            else: # personal model following ModelProtocol!
                 if inspect.isclass(method):
                     try: model = method(n=n_classes, init=init)
                     except:
@@ -992,14 +1049,23 @@ class PolyhedralUnmixingModel:
                                     except: raise ValueError("Cannot initialize clustering model. Please check ModelProtocol class functions and arguments.")
                 else: model = method
             
+            # Extract random sample for model fitting!
             sample, sample_idx = extract_random_sample(tdata, prop=sample_prop, return_indices=True)
+            if n_classes > sample.shape[0]: warnings.warn("More classes than data in extracted sample! Clustering model may not converge as expected.")
 
-            if hasattr(model, "fit") and callable(getattr(model, "fit")):
-                try: model.fit(X=sample)
-                except: 
-                    try: model.fit(sample)
-                    except: raise TypeError("Cannot fit the clustering model using its 'fit' function. Please check ModelProtocol functions and arguments.")
+            # Fit model on random sample!
+            if hasattr(model, "predict") and callable(getattr(model, "predict")):
+                if hasattr(model, "fit") and callable(getattr(model, "fit")):
+                    try: model.fit(X=sample)
+                    except: 
+                        try: model.fit(sample)
+                        except: raise TypeError("Cannot fit the clustering model using its 'fit' function. Please check ModelProtocol functions and arguments.")
+                else:
+                    warnings.warn("Clustering model has a 'predict' function while not having a 'fit' function: cannot fit it! Is this intended?")
+            elif hasattr(model, "fit") and callable(getattr(model, "fit")):
+                warnings.warn("Clustering model has a 'fit' function while not having a 'predict' function: cannot predict anything! Is this intended?")
 
+        # Predict data using clustering model
         if hasattr(model, "predict") and callable(getattr(model, "predict")):
             try: labels = model.predict(X=tdata)
             except: 
@@ -1008,6 +1074,61 @@ class PolyhedralUnmixingModel:
         else: # is instance or function
             try: labels = model(tdata)
             except: raise ValueError("Cannot call '" + ("self.clustering_model" if predict_mode else "method") + "' instance or function on given data.")
+
+        # Add missing ids in labels by minimum-distance re-labeling in missed clusters
+        if not predict_mode:
+            expected_ids = set(range(n_classes))
+            present_ids = set(np.unique(labels))
+            missing_ids = expected_ids.difference(present_ids)
+            
+            if len(missing_ids) > 0:
+                warnings.warn("Not all the classes are represented in the input data! Missing: {}. Automatic correction...".format(missing_ids))
+                
+                def set_min_distance_labels(distances:np.ndarray, labels:np.ndarray, cluster_id:int) -> None:
+                    '''
+                    Find the lowest distance whose associated label is not the only one remaining in `labels`, and set it to cluster_id.\n
+                    /!\\\ Only for one cluster! Directly set values in `distances` and `labels`, the first array being relative to the cluster.
+                    '''
+                    while np.min(distances) < np.inf:
+                        argmin_dis = np.argmin(distances).item()
+                        argmin_dis_label = labels[argmin_dis]
+                        if np.sum(labels == argmin_dis_label) >= 2:
+                            labels[argmin_dis] = cluster_id
+                            break
+                        distances[argmin_dis] = np.inf
+
+                if type(method) is str and method == 'k-means':
+                    cluster_means = model.cluster_centers_
+                    for i_miss in missing_ids:
+                        miss_mean = cluster_means[i_miss]
+                        distances = np.sqrt(np.sum(np.square(tdata - miss_mean), axis=1))
+                        set_min_distance_labels(distances, labels, i_miss)
+                
+                elif type(method) is str and method == 'GMM':
+                    cluster_means = model.means_
+                    cluster_covariances = model.covariances_
+                    for i_miss in missing_ids:
+                        miss_mean = cluster_means[i_miss]
+                        miss_covariance = cluster_covariances[i_miss]
+                        distances = mahalanobis(data = tdata, mu = miss_mean, sigma = miss_covariance)
+                        set_min_distance_labels(distances, labels, i_miss)
+                
+                else:
+                    try: cluster_means = model.means_
+                    except: 
+                        try: cluster_means = model.cluster_centers_
+                        except: cluster_means = None
+                    try: cluster_covariances = model.covariances_
+                    except: cluster_covariances = None
+                    for i_miss in missing_ids:
+                        if cluster_means is not None: miss_mean = cluster_means[i_miss]
+                        else: miss_mean = (np.random.rand(tdata.shape[1])*2-1) * np.max(np.abs(tdata))
+                        if cluster_covariances is not None:
+                            miss_covariance = cluster_covariances[i_miss]
+                            distances = mahalanobis(data = tdata, mu = miss_mean, sigma = miss_covariance)
+                        else:
+                            distances = np.sqrt(np.sum(np.square(tdata - miss_mean), axis=1))
+                        set_min_distance_labels(distances, labels, i_miss)
 
         labels = labels.reshape(*data.shape[:-1])
 
@@ -1082,7 +1203,7 @@ class PolyhedralUnmixingModel:
             else: raise ValueError("Input data must be iterable")
         dshape = data.shape
         if data.ndim > 2:
-            data = data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+            data = data.reshape(-1, data.shape[-1])
         if self.verbose:
             print(f"Spectral data - size: {dshape[:-1]}; bands: {data.shape[-1]}")
         
@@ -1139,11 +1260,11 @@ class PolyhedralUnmixingModel:
         self.n_endmembers = len(polyhedra)
 
         # D -> E: Computation of the signed distances to the convex polyhedral sets
-        if self.verbose: print("* [4/7] (D -> E) Signed distances computation (" + ("Python" if self.only_python else "C") + ")...", end=' ')
+        if self.verbose: print(f"* [4/7] (D -> E) Signed distances computation ({self.MNP_algo})...", end=' ')
         distances = signed_distances_to_polyhedra(
             data = new_data, 
             h = polyhedra, 
-            python = self.only_python, 
+            MNP_algo = self.MNP_algo, 
             infos = False)
         if self.verbose: print("Done!")
         
@@ -1162,7 +1283,7 @@ class PolyhedralUnmixingModel:
         A_estimate = to_probability(
             x = new_distances, 
             saturation = saturation, 
-            python = self.only_python)
+            MNP_algo = self.MNP_algo)
         if self.verbose: print("Done!")
 
         # FINAL: Endmember and abundance recovery
@@ -1211,7 +1332,7 @@ class PolyhedralUnmixingModel:
             else: raise ValueError("Input data must be iterable")
         dshape = data.shape
         if data.ndim > 2:
-            data = data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+            data = data.reshape(-1, data.shape[-1])
         if self.verbose:
             print(f"Spectral data - size: {dshape[:-1]}; bands: {data.shape[-1]}")
         
@@ -1225,11 +1346,11 @@ class PolyhedralUnmixingModel:
         if self.verbose: print("Done!")
 
         # D -> E: Computation of the signed distances to the convex polyhedral sets
-        if self.verbose: print("* [2/5] (D -> E) Signed distances computation (" + ("Python" if self.only_python else "C") + ")...", end=' ')
+        if self.verbose: print(f"* [2/5] (D -> E) Signed distances computation ({self.MNP_algo})...", end=' ')
         distances = signed_distances_to_polyhedra(
             data = new_data, 
             h = self.polyhedra, 
-            python = self.only_python, 
+            MNP_algo = self.MNP_algo, 
             infos = False)
         if self.verbose: print("Done!")
         
@@ -1246,7 +1367,7 @@ class PolyhedralUnmixingModel:
         A_estimate = to_probability(
             x = new_distances, 
             saturation = saturation, 
-            python = self.only_python)
+            MNP_algo = self.MNP_algo)
         if self.verbose: print("Done!")
 
         # FINAL: Endmember and abundance recovery
@@ -1301,7 +1422,7 @@ class PolyhedralUnmixingModel:
             else: raise ValueError("Input data must be iterable")
         dshape = data.shape
         if data.ndim > 2:
-            data = data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+            data = data.reshape(-1, data.shape[-1])
         if self.verbose:
             print(f"Spectral data - size: {dshape[:-1]}; bands: {data.shape[-1]}")
 
@@ -1485,7 +1606,7 @@ class PolyhedralUnmixingModel:
             else: raise ValueError("Input data must be iterable")
         dshape = data.shape
         if data.ndim > 2:
-            data = data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+            data = data.reshape(-1, data.shape[-1])
         if self.verbose:
             print(f"Spectral data - size: {dshape[:-1]}; bands: {data.shape[-1]}")
         
@@ -1542,11 +1663,11 @@ class PolyhedralUnmixingModel:
         self.n_endmembers = len(polyhedra)
 
         # D -> E: Computation of the signed distances to the convex polyhedral sets
-        if self.verbose: print("* [4/5] (D -> E) Signed distances computation (" + ("Python" if self.only_python else "C") + ")...", end=' ')
+        if self.verbose: print(f"* [4/5] (D -> E) Signed distances computation ({self.MNP_algo})...", end=' ')
         distances = signed_distances_to_polyhedra(
             data = new_data, 
             h = polyhedra, 
-            python = self.only_python, 
+            MNP_algo = self.MNP_algo, 
             infos = False)
         if self.verbose: print("Done!")
         
@@ -1617,7 +1738,7 @@ class PolyhedralUnmixingModel:
             else: raise ValueError("Input data must be iterable")
         dshape = data.shape
         if data.ndim > 2:
-            data = data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+            data = data.reshape(-1, data.shape[-1])
         if self.verbose:
             print(f"Spectral data - size: {dshape[:-1]}; bands: {data.shape[-1]}")
         
@@ -1674,11 +1795,11 @@ class PolyhedralUnmixingModel:
         self.n_endmembers = len(polyhedra)
 
         # D -> E: Computation of the signed distances to the convex polyhedral sets
-        if self.verbose: print("* [4/6] (D -> E) Signed distances computation (" + ("Python" if self.only_python else "C") + ")...", end=' ')
+        if self.verbose: print(f"* [4/6] (D -> E) Signed distances computation ({self.MNP_algo})...", end=' ')
         distances = signed_distances_to_polyhedra(
             data = new_data, 
             h = polyhedra, 
-            python = self.only_python, 
+            MNP_algo = self.MNP_algo, 
             infos = False)
         if self.verbose: print("Done!")
         
@@ -1697,7 +1818,7 @@ class PolyhedralUnmixingModel:
         A_estimate = to_probability(
             x = new_distances, 
             saturation = saturation, 
-            python = self.only_python)
+            MNP_algo = self.MNP_algo)
         if self.verbose: print("Done!")
 
         return A_estimate.reshape(*dshape[:-1], A_estimate.shape[-1])
@@ -1731,7 +1852,7 @@ class PolyhedralUnmixingModel:
             else: raise ValueError("Input data must be iterable")
         dshape = data.shape
         if data.ndim > 2:
-            data = data.reshape(int(np.prod(data.shape[:-1])), data.shape[-1])
+            data = data.reshape(-1, data.shape[-1])
         if self.verbose:
             print(f"Spectral data - size: {dshape[:-1]}; bands: {data.shape[-1]}")
 
@@ -1745,11 +1866,11 @@ class PolyhedralUnmixingModel:
         if self.verbose: print("Done!")
 
         # D -> E: Computation of the signed distances to the convex polyhedral sets
-        if self.verbose: print("* [2/4] (D -> E) Signed distances computation (" + ("Python" if self.only_python else "C") + ")...", end=' ')
+        if self.verbose: print(f"* [2/4] (D -> E) Signed distances computation ({self.MNP_algo})...", end=' ')
         distances = signed_distances_to_polyhedra(
             data = new_data, 
             h = self.polyhedra, 
-            python = self.only_python, 
+            MNP_algo = self.MNP_algo, 
             infos = False)
         if self.verbose: print("Done!")
         
@@ -1766,7 +1887,7 @@ class PolyhedralUnmixingModel:
         A_estimate = to_probability(
             x = new_distances, 
             saturation = saturation, 
-            python = self.only_python)
+            MNP_algo = self.MNP_algo)
         if self.verbose: print("Done!")
 
         return A_estimate.reshape(*dshape[:-1], A_estimate.shape[-1])
