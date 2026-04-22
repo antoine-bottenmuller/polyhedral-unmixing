@@ -1,10 +1,40 @@
 import warnings
 import itertools
 import numpy as np
+from skimage.metrics import structural_similarity as SSIM
 from sklearn.metrics import accuracy_score, precision_score
 from scipy.optimize import linear_sum_assignment
 from typing import Tuple, Optional, Literal
 from src.unmixing import scalar, normed
+
+
+#%%
+# Evaluation metrics: SAD, RMSE, DSSIM
+###
+
+# Endmember SAD
+def SAD(M_gt:np.ndarray, M_hat:np.ndarray, individual:bool=False) -> float:
+    """Shape: (n_endmembers, n_bands) if not individual; any shape if individual, where each array represents one unique vector."""
+    try:
+        M_gt  = np.asarray(M_gt )
+        M_hat = np.asarray(M_hat)
+    except:
+        raise ValueError("Input variables must be ndarrays")
+    if M_gt.ndim != M_hat.ndim:
+        raise ValueError("Input arrays must have same dimension")
+    if np.sum(np.array(M_gt.shape) != np.array(M_hat.shape)) != 0:
+        raise ValueError("Input arrays must have same shape")
+    if M_gt.ndim == 0:
+        return float(0.0)
+    if individual:
+        return np.arccos(scalar(normed(M_gt.flatten()),normed(M_hat.flatten()))).item()
+    if M_gt.ndim not in {1,2}:
+        raise ValueError("Input arrays must be of dimension 1 or 2")
+    if M_gt.ndim == 1:
+        warnings.warn("Input arrays are of dimension 1, while individual=False. Considered as individual=True; otherwise, the SAD would be exactly 0.")
+    elif M_gt.shape[0] > M_gt.shape[1]:
+        warnings.warn("The number of rows (n_endmembers) is larger than the number of columns (n_bands). Did you mean the transpose matrix?")
+    return np.mean(np.arccos(scalar(normed(M_gt),normed(M_hat)))).item()
 
 # Abundance RMSE
 def RMSE(A_gt:np.ndarray, A_hat:np.ndarray, individual:bool=False) -> float:
@@ -32,29 +62,155 @@ def RMSE(A_gt:np.ndarray, A_hat:np.ndarray, individual:bool=False) -> float:
         warnings.warn("The number of rows (n_pixels) is less than the number of columns (n_endmembers). Did you mean the transpose matrix?")
     return np.mean(np.sqrt(np.mean(np.square(A_gt - A_hat), axis=0))).item()
 
-# Endmember SAD
-def SAD(M_gt:np.ndarray, M_hat:np.ndarray, individual:bool=False) -> float:
-    """Shape: (n_endmembers, n_bands) if not individual; any shape if individual, where each array represents one unique vector."""
-    try:
-        M_gt  = np.asarray(M_gt )
-        M_hat = np.asarray(M_hat)
-    except:
-        raise ValueError("Input variables must be ndarrays")
-    if M_gt.ndim != M_hat.ndim:
-        raise ValueError("Input arrays must have same dimension")
-    if np.sum(np.array(M_gt.shape) != np.array(M_hat.shape)) != 0:
-        raise ValueError("Input arrays must have same shape")
-    if M_gt.ndim == 0:
-        return float(0.0)
-    if individual:
-        return np.arccos(scalar(normed(M_gt.flatten()),normed(M_hat.flatten()))).item()
-    if M_gt.ndim not in {1,2}:
-        raise ValueError("Input arrays must be of dimension 1 or 2")
-    if M_gt.ndim == 1:
-        warnings.warn("Input arrays are of dimension 1, while individual=False. Considered as individual=True; otherwise, the SAD would be exactly 0.")
-    elif M_gt.shape[0] > M_gt.shape[1]:
-        warnings.warn("The number of rows (n_endmembers) is larger than the number of columns (n_bands). Did you mean the transpose matrix?")
-    return np.mean(np.arccos(scalar(normed(M_gt),normed(M_hat)))).item()
+# Abundance map DSSIM
+def DSSIM(
+    im1,
+    im2,
+    *,
+    win_size=None,
+    gradient=False,
+    data_range=None,
+    channel_axis=None,
+    gaussian_weights=False,
+    full=False,
+    **kwargs,
+):
+    """
+    Compute the mean structural DISsimilarity index between two images.
+    Please pay attention to the `data_range` parameter with floating-point images.
+
+    Parameters
+    ----------
+    im1, im2 : ndarray
+        Images. Any dimensionality with same shape.
+    win_size : int or None, optional
+        The side-length of the sliding window used in comparison. Must be an
+        odd value. If `gaussian_weights` is True, this is ignored and the
+        window size will depend on `sigma`.
+    gradient : bool, optional
+        If True, also return the gradient with respect to im2.
+    data_range : float, optional
+        The data range of the input image (difference between maximum and
+        minimum possible values). By default, this is estimated from the image
+        data type. This estimate may be wrong for floating-point image data.
+        Therefore it is recommended to always pass this scalar value explicitly
+        (see note below).
+    channel_axis : int or None, optional
+        If None, the image is assumed to be a grayscale (single channel) image.
+        Otherwise, this parameter indicates which axis of the array corresponds
+        to channels.
+
+        .. versionadded:: 0.19
+           ``channel_axis`` was added in 0.19.
+    gaussian_weights : bool, optional
+        If True, each patch has its mean and variance spatially weighted by a
+        normalized Gaussian kernel of width sigma=1.5.
+    full : bool, optional
+        If True, also return the full structural similarity image.
+
+    Other Parameters
+    ----------------
+    use_sample_covariance : bool
+        If True, normalize covariances by N-1 rather than, N where N is the
+        number of pixels within the sliding window.
+    K1 : float
+        Algorithm parameter, K1 (small constant).
+    K2 : float
+        Algorithm parameter, K2 (small constant).
+    sigma : float
+        Standard deviation for the Gaussian when `gaussian_weights` is True.
+
+    Returns
+    -------
+    dmssim : float
+        The mean structural DISsimilarity index over the image.
+    dgrad : ndarray
+        The gradient of the structural DISsimilarity between im1 and im2.
+        This is only returned if `gradient` is set to True.
+    DS : ndarray
+        The full DSSIM image.  This is only returned if `full` is set to True.
+
+    Notes
+    -----
+    If `data_range` is not specified, the range is automatically guessed
+    based on the image data type. However for floating-point image data, this
+    estimate yields a result double the value of the desired range, as the
+    `dtype_range` in `skimage.util.dtype.py` has defined intervals from -1 to
+    +1. This yields an estimate of 2, instead of 1, which is most often
+    required when working with image data (as negative light intensities are
+    nonsensical). In case of working with YCbCr-like color data, note that
+    these ranges are different per channel (Cb and Cr have double the range
+    of Y), so one cannot calculate a channel-averaged SSIM with a single call
+    to this function, as identical ranges are assumed for each channel.
+    
+    """
+
+    if gradient is True and full is True:
+        mssim, grad, S = SSIM(
+            im1, im2, 
+            win_size=win_size, 
+            gradient=gradient,
+            data_range=data_range,
+            channel_axis=channel_axis,
+            gaussian_weights=gaussian_weights,
+            full=full,
+            **kwargs
+        )
+        dmssim = (1 - mssim) / 2
+        dgrad  = - grad / 2
+        DS     = (1 -     S) / 2
+        return dmssim, dgrad, DS
+    
+    elif gradient is True and full is False:
+        mssim, grad = SSIM(
+            im1, im2, 
+            win_size=win_size, 
+            gradient=gradient,
+            data_range=data_range,
+            channel_axis=channel_axis,
+            gaussian_weights=gaussian_weights,
+            full=full,
+            **kwargs
+        )
+        dmssim = (1 - mssim) / 2
+        dgrad  = - grad / 2
+        return dmssim, dgrad
+    
+    elif gradient is False and full is True:
+        mssim, S = SSIM(
+            im1, im2, 
+            win_size=win_size, 
+            gradient=gradient,
+            data_range=data_range,
+            channel_axis=channel_axis,
+            gaussian_weights=gaussian_weights,
+            full=full,
+            **kwargs
+        )
+        dmssim = (1 - mssim) / 2
+        DS     = (1 -     S) / 2
+        return dmssim, DS
+    
+    mssim = SSIM(
+        im1, im2, 
+        win_size=win_size, 
+        gradient=gradient,
+        data_range=data_range,
+        channel_axis=channel_axis,
+        gaussian_weights=gaussian_weights,
+        full=full,
+        **kwargs
+    )
+    dmssim = (1 - mssim) / 2
+    return dmssim
+
+
+#%%
+# Permutation functions: 
+# 1. permute_to_GT_M (permute M_hat and A_hat over GT endmembers M_gt), 
+# 2. permute_to_GT_A (permute M_hat and A_hat over GT abundances A_gt), 
+# 3. reorder_C (re-order classification labels over GT labels).
+###
 
 # Permute (A_hat, M_hat) to align with (_, M_gt)
 def permute_to_GT_M(
