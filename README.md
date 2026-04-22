@@ -91,13 +91,13 @@ pip install ./src/min_norm_point_C   # compile & install C minimal-norm point pa
 
 ⚠️ If the second command fails, follow the instructions in `src/min_norm_point_C/README.md` for manual compilation.
 
-You may also use either DAQP (`min_norm_point_DAQP.py`) or the Python version of our MNP algorithm (`min_norm_point_PYTHON.py`) instead, but note that the latter is about **100× slower** than the C version.
+You can also use either DAQP (`min_norm_point_DAQP.py`) or the Python version of our MNP algorithm (`min_norm_point_PYTHON.py`) instead, but note that the latter is about **100× slower** than the C version.
 
 ## Using the Code
 
 Please download and drop the datasets in the **datasets/** folder (see `datasets/README.md`). 
 This may be done either manually or automatically using the **load** functions provided in `datasets.py`. 
-Then, open and run one of the three Notebooks as an example.
+Open and run one of the three Notebooks as an example.
 
 To use the main unmixing model, import the **PolyhedralUnmixingModel** class and initialize it via
 ```python
