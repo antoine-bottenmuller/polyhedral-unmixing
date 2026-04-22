@@ -748,7 +748,7 @@ class PolyhedralUnmixingModel:
             PCA_ndim: Optional[int] = None, 
             keep_normalized: bool = True, 
             MNP_algo: Literal['MNP_Python','MNP_C','DAQP','auto'] = 'auto', 
-            saturation: float = 1.0, 
+            saturation: float = 2 / 5, 
             verbose: bool = True
     ) -> None:
         """
