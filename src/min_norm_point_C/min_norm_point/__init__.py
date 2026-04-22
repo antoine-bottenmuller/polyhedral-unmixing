@@ -1,1 +1,0 @@
-from .min_norm_point import minimum_norm_points_to_polyhedra
