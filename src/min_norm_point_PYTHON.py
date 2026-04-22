@@ -36,7 +36,7 @@ def q_is_not_minor(q:np.ndarray, h:np.ndarray, p:Optional[np.ndarray]=None, res:
 ##
 
 # Recursive function for nearest-point algorithm
-def __f0(h_original:np.ndarray, q:np.ndarray, h:np.ndarray, U:np.ndarray, eps:float=1e-6, steps:List=[], step:int=0) -> Tuple[np.ndarray, bool]:
+def __f0(h_original:np.ndarray, q:np.ndarray, h:np.ndarray, U:np.ndarray, eps:float=1e-6, steps:List=None, step:int=0) -> Tuple[np.ndarray, bool]:
     """Recursive function for nearest-point algorithm (V0)."""
     # p_original = 0
     # NO condition on family (v_i)_i
