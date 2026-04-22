@@ -13,12 +13,12 @@ from typing import Tuple, Literal, Optional, Callable, Protocol, Any
 from src.polyset import scalar, norm, normed
 from src.polyset import to_half_space_pairs, distribute_halfspaces, keep_only_necessary_pairs
 
-try: from src.min_norm_point_PYTHON import minimum_norm_points_to_polyhedra_PYTHON # PYTHON VERSION
+try: from src.min_norm_point_solvers.min_norm_point_DAQP import minimum_norm_points_to_polyhedra_DAQP # DAQP solver
+except Exception: warnings.warn("Failed loading DAQP solver for the minimum-norm point problem")
+try: from src.min_norm_point_solvers.min_norm_point_PYTHON import minimum_norm_points_to_polyhedra_PYTHON # PYTHON VERSION
 except Exception: warnings.warn("Failed loading the Python version of the minimum-norm point algorithm.")
 try: from min_norm_point import minimum_norm_points_to_polyhedra # C VERSION 
 except Exception: warnings.warn("Failed loading the C version of the minimum-norm point algorithm.")
-try: from src.min_norm_point_DAQP import minimum_norm_points_to_polyhedra_DAQP # DAQP solver
-except Exception: warnings.warn("Failed loading DAQP solver for the minimum-norm point problem")
 
 
 #%%
