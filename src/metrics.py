@@ -9,7 +9,7 @@ from src.unmixing import scalar, normed
 
 
 #%%
-# Evaluation metrics: SAD, RMSE, DSSIM
+# Evaluation metrics: Endmember SAD, SID; and Abundance RMSE, DSSIM
 ###
 
 # Endmember SAD
@@ -35,6 +35,25 @@ def SAD(M_gt:np.ndarray, M_hat:np.ndarray, individual:bool=False) -> float:
     elif M_gt.shape[0] > M_gt.shape[1]:
         warnings.warn("The number of rows (n_endmembers) is larger than the number of columns (n_bands). Did you mean the transpose matrix?")
     return np.mean(np.arccos(scalar(normed(M_gt),normed(M_hat)))).item()
+
+# Endmember SID
+def SID(M_gt:np.ndarray, M_hat:np.ndarray, eps:float=1e-6) -> float:
+    """Shape: (n_endmembers, n_bands) if not individual; any shape if individual, where each array represents one unique vector."""
+    try:
+        M_gt  = np.asarray(M_gt )
+        M_hat = np.asarray(M_hat)
+    except:
+        raise ValueError("Input variables must be ndarrays")
+    if M_gt.ndim != M_hat.ndim:
+        raise ValueError("Input arrays must have same dimension")
+    if np.sum(np.array(M_gt.shape) != np.array(M_hat.shape)) != 0:
+        raise ValueError("Input arrays must have same shape")
+    if M_gt.ndim == 0:
+        return float(0.0)
+    normalize_inp = (M_hat / np.sum(M_hat, axis=-1, keepdims=True)) + eps
+    normalize_tar = (M_gt  / np.sum(M_gt , axis=-1, keepdims=True)) + eps
+    sid = np.sum(normalize_inp * np.log(normalize_inp / normalize_tar) + normalize_tar * np.log(normalize_tar / normalize_inp))
+    return sid.item()
 
 # Abundance RMSE
 def RMSE(A_gt:np.ndarray, A_hat:np.ndarray, individual:bool=False) -> float:
